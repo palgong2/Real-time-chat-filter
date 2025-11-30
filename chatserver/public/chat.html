@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>채팅</title>
+  </head>
+  <body>
+    <h1>채팅</h1>
+
+    <p>
+      <button id="logoutBtn">로그아웃</button>
+    </p>
+
+    <div>
+      <label>방 ID: <input id="roomId" value="room1" /></label>
+      <button id="joinBtn">방 들어가기</button>
+    </div>
+
+    <div>
+      <input id="message" placeholder="메시지 입력" />
+      <button id="sendBtn">보내기</button>
+    </div>
+
+    <pre
+      id="log"
+      style="border: 1px solid #ccc; height: 250px; overflow-y: scroll"
+    ></pre>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const roomInput = document.getElementById("roomId");
+      const joinBtn = document.getElementById("joinBtn");
+      const msgInput = document.getElementById("message");
+      const sendBtn = document.getElementById("sendBtn");
+      const logEl = document.getElementById("log");
+      const logoutBtn = document.getElementById("logoutBtn");
+
+      let socket = null;
+      let joinedRoom = null;
+
+      function log(text) {
+        logEl.textContent += text + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function ensureAuth() {
+        const token = localStorage.getItem("authToken");
+        const nickname = localStorage.getItem("nickname");
+
+        if (!token || !nickname) {
+          alert("로그인 정보가 없습니다. 로그인 페이지로 이동합니다.");
+          window.location.href = "/";
+          return null;
+        }
+
+        return { token, nickname };
+      }
+
+      function connectSocket(token) {
+        socket = io("http://localhost:3000", {
+          auth: { token },
+        });
+
+        socket.on("connect", () => {
+          log("[SYSTEM] 서버에 연결되었습니다.");
+        });
+
+        socket.on("disconnect", () => {
+          log("[SYSTEM] 서버에서 연결이 끊어졌습니다.");
+        });
+
+        socket.on("chat:receive", (payload) => {
+          const { nickname, message } = payload;
+          log(`${nickname}: ${message}`);
+        });
+
+        socket.on("connect_error", (err) => {
+          log("[ERROR] 소켓 연결 오류: " + err.message);
+        });
+      }
+
+      // 초기 진입 시 로그인 확인 & 소켓 연결
+      const auth = ensureAuth();
+      if (auth) {
+        connectSocket(auth.token);
+        log("[SYSTEM] 로그인된 사용자: " + auth.nickname);
+      }
+
+      joinBtn.onclick = () => {
+        if (!socket || !socket.connected) {
+          alert("소켓이 연결되지 않았습니다.");
+          return;
+        }
+        const roomId = roomInput.value.trim();
+        if (!roomId) {
+          alert("방 ID를 입력하세요");
+          return;
+        }
+        socket.emit("chat:join", { roomId });
+        joinedRoom = roomId;
+        log(`[SYSTEM] 방 ${roomId} 에 입장했습니다.`);
+      };
+
+      sendBtn.onclick = () => {
+        if (!socket || !socket.connected) {
+          alert("소켓이 연결되지 않았습니다.");
+          return;
+        }
+        if (!joinedRoom) {
+          alert("먼저 방에 들어가세요");
+          return;
+        }
+        const message = msgInput.value.trim();
+        if (!message) return;
+
+        socket.emit("chat:send", {
+          roomId: joinedRoom,
+          message,
+        });
+        msgInput.value = "";
+      };
+
+      logoutBtn.onclick = () => {
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("nickname");
+        alert("로그아웃되었습니다.");
+        window.location.href = "/";
+      };
+    </script>
+  </body>
+</html>

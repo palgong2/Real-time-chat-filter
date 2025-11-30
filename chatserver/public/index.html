@@ -2,87 +2,139 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <title>간단 채팅 테스트</title>
+    <title>로그인 / 회원가입</title>
   </head>
   <body>
-    <h1>채팅 테스트</h1>
+    <h1>로그인 / 회원가입</h1>
 
+    <h2>회원가입</h2>
     <div>
-      <label>닉네임: <input id="nickname" /></label>
+      <label>이메일: <input id="reg-email" type="email" /></label>
     </div>
     <div>
-      <label>방 ID: <input id="roomId" value="room1" /></label>
-      <button id="joinBtn">방 들어가기</button>
+      <label>비밀번호: <input id="reg-password" type="password" /></label>
     </div>
+    <div>
+      <label>닉네임: <input id="reg-nickname" /></label>
+    </div>
+    <button id="registerBtn">회원가입</button>
 
+    <hr />
+
+    <h2>로그인</h2>
     <div>
-      <input id="message" placeholder="메시지 입력" />
-      <button id="sendBtn">보내기</button>
+      <label>이메일: <input id="login-email" type="email" /></label>
     </div>
+    <div>
+      <label>비밀번호: <input id="login-password" type="password" /></label>
+    </div>
+    <button id="loginBtn">로그인</button>
 
     <pre
       id="log"
-      style="border: 1px solid #ccc; height: 200px; overflow-y: scroll"
+      style="border: 1px solid #ccc; height: 150px; overflow-y: auto"
     ></pre>
 
-    <script src="/socket.io/socket.io.js"></script>
     <script>
-      const socket = io("http://localhost:3000");
+      const regEmailInput = document.getElementById("reg-email");
+      const regPasswordInput = document.getElementById("reg-password");
+      const regNicknameInput = document.getElementById("reg-nickname");
+      const registerBtn = document.getElementById("registerBtn");
 
-      const nicknameInput = document.getElementById("nickname");
-      const roomInput = document.getElementById("roomId");
-      const joinBtn = document.getElementById("joinBtn");
-      const msgInput = document.getElementById("message");
-      const sendBtn = document.getElementById("sendBtn");
+      const loginEmailInput = document.getElementById("login-email");
+      const loginPasswordInput = document.getElementById("login-password");
+      const loginBtn = document.getElementById("loginBtn");
+
       const logEl = document.getElementById("log");
-
-      let joinedRoom = null;
 
       function log(text) {
         logEl.textContent += text + "\n";
         logEl.scrollTop = logEl.scrollHeight;
       }
 
-      joinBtn.onclick = () => {
-        const roomId = roomInput.value.trim();
-        if (!roomId) {
-          alert("방 ID를 입력하세요");
+      // 회원가입 버튼 클릭
+      registerBtn.onclick = async () => {
+        const email = regEmailInput.value.trim();
+        const password = regPasswordInput.value.trim();
+        const nickname = regNicknameInput.value.trim();
+
+        if (!email || !password || !nickname) {
+          alert("이메일, 비밀번호, 닉네임을 모두 입력하세요.");
           return;
         }
-        socket.emit("chat:join", { roomId });
-        joinedRoom = roomId;
-        log(`[SYSTEM] 방 ${roomId} 에 입장했습니다.`);
+
+        try {
+          const res = await fetch("/auth/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password, nickname }),
+          });
+
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            alert("회원가입 실패: " + (data.message || res.status));
+            log("[ERROR] 회원가입 실패: " + (data.message || res.status));
+            return;
+          }
+
+          log("[SYSTEM] 회원가입 성공: " + nickname);
+          alert("회원가입이 완료되었습니다. 아래 로그인 폼에서 로그인하세요.");
+        } catch (e) {
+          console.error(e);
+          alert("회원가입 중 오류가 발생했습니다.");
+          log("[ERROR] " + e.message);
+        }
       };
 
-      sendBtn.onclick = () => {
-        if (!joinedRoom) {
-          alert("먼저 방에 들어가세요");
+      // 로그인 버튼 클릭
+      loginBtn.onclick = async () => {
+        const email = loginEmailInput.value.trim();
+        const password = loginPasswordInput.value.trim();
+
+        if (!email || !password) {
+          alert("이메일/비밀번호를 입력하세요.");
           return;
         }
-        const nickname = nicknameInput.value.trim() || "익명";
-        const message = msgInput.value.trim();
-        if (!message) return;
 
-        socket.emit("chat:send", {
-          roomId: joinedRoom,
-          nickname,
-          message,
-        });
-        msgInput.value = "";
+        try {
+          const res = await fetch("/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password }),
+          });
+
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            alert("로그인 실패: " + (data.message || res.status));
+            log("[ERROR] 로그인 실패: " + (data.message || res.status));
+            return;
+          }
+
+          const token = data.token;
+          const nickname = data.nickname;
+
+          if (!token) {
+            alert(
+              "토큰이 응답에 없습니다. 백엔드 코드를 다시 확인해야 합니다."
+            );
+            return;
+          }
+
+          // 토큰과 닉네임을 localStorage에 저장
+          localStorage.setItem("authToken", token);
+          localStorage.setItem("nickname", nickname);
+
+          log("[SYSTEM] 로그인 성공: " + nickname);
+          alert("로그인 성공, 채팅 페이지로 이동합니다.");
+          window.location.href = "/chat.html";
+        } catch (e) {
+          console.error(e);
+          alert("로그인 중 오류가 발생했습니다.");
+          log("[ERROR] " + e.message);
+        }
       };
-
-      socket.on("chat:receive", (payload) => {
-        const { nickname, message } = payload;
-        log(`${nickname}: ${message}`);
-      });
-
-      socket.on("connect", () => {
-        log("[SYSTEM] 서버에 연결되었습니다.");
-      });
-
-      socket.on("disconnect", () => {
-        log("[SYSTEM] 서버에서 연결이 끊어졌습니다.");
-      });
     </script>
   </body>
 </html>

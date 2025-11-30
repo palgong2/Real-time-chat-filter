@@ -1,3 +1,4 @@
+### 회원가입
 POST http://localhost:3000/auth/register
 Content-Type: application/json
 
@@ -7,7 +8,17 @@ Content-Type: application/json
   "nickname": "tester"
 }
 
-### 로그인 테스트
+### 회원가입 (tester2)
+POST http://localhost:3000/auth/register
+Content-Type: application/json
+
+{
+  "email": "test2@example.com",
+  "password": "1234",
+  "nickname": "tester2"
+}
+
+### 로그인
 POST http://localhost:3000/auth/login
 Content-Type: application/json
 
@@ -15,3 +26,13 @@ Content-Type: application/json
   "email": "test@example.com",
   "password": "1234"
 }
+
+### 로그인 (tester2)
+POST http://localhost:3000/auth/login
+Content-Type: application/json
+
+{
+  "email": "test2@example.com",
+  "password": "1234"
+}
+
