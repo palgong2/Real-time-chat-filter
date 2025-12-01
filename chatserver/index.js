@@ -62,6 +62,27 @@ function evaluateMessage(original) {
   };
 }
 
+async function logAbuse({ userId, roomId, original, masked, score }) {
+  if (score <= 0) return null;
+
+  try {
+    const [result] = await pool.query(
+      "INSERT INTO abuse_logs (user_id, room_id, original_message, masked_message, score) VALUES (?, ?, ?, ?, ?)",
+      [userId, roomId, original, masked, score]
+    );
+    return result.insertId;
+  } catch (err) {
+    console.error("욕설 로그 저장 실패:", err);
+    return null;
+  }
+}
+
+async function notifyBanByEmailPlaceholder(user, abuseLogId, roomId, score) {
+  console.log(
+    `[BAN] user_id=${user.id}, room=${roomId}, abuse_log_id=${abuseLogId}, score=${score}`
+  );
+}
+
 // DB에서 유저 조회
 async function findUserById(userId) {
   const [rows] = await pool.query(
@@ -83,12 +104,12 @@ async function findUserById(userId) {
 }
 
 // 벌점 적용 규칙 (원하는 대로 조정 가능)
-async function applyPenalty(user, score) {
+async function applyPenalty(user, score, abuseLogId = null, roomId = null) {
   if (!user || score <= 0) return null;
 
   let newPenaltyPoints = (user.penaltyPoints ?? 0) + score;
   let newIsBanned = !!user.isBanned;
-  let newMuteUntil = user.muteUntil ? new Date(user.muteUntil) : null;
+  let newMuteUntil = user.muteUntil ?? null;
   let result = null;
 
   const isSevereMessage = score >= 15;
@@ -112,6 +133,16 @@ async function applyPenalty(user, score) {
   user.penaltyPoints = newPenaltyPoints;
   user.isBanned = newIsBanned;
   user.muteUntil = newMuteUntil;
+
+  // ★ 정지된 경우 ban_events에 한 줄 남기기
+  if (result === "banned") {
+    await pool.query(
+      "INSERT INTO ban_events (user_id, abuse_log_id, room_id, score) VALUES (?, ?, ?, ?)",
+      [user.id, abuseLogId, roomId, score]
+    );
+
+    await notifyBanByEmailPlaceholder(user, abuseLogId, roomId, score);
+  }
 
   return result;
 }
@@ -177,7 +208,7 @@ app.post("/auth/login", async (req, res) => {
 
   try {
     const [rows] = await pool.query(
-      "SELECT id, email, password_hash, nickname, is_banned, penalty_points, mute_until FROM users WHERE email = ?",
+      "SELECT id, email, password_hash, nickname, is_banned, penalty_points, mute_until, is_admin FROM users WHERE email = ?",
       [email]
     );
     if (rows.length === 0) {
@@ -255,10 +286,160 @@ io.on("connection", (socket) => {
     socket.data.userId
   );
 
-  socket.on("chat:join", ({ roomId }) => {
+  socket.on("user:status", async () => {
+    try {
+      const userId = socket.data.userId;
+      if (!userId) {
+        socket.emit("user:status-result", {
+          ok: false,
+          message: "인증 정보가 없습니다.",
+        });
+        return;
+      }
+
+      const user = await findUserById(userId);
+      if (!user) {
+        socket.emit("user:status-result", {
+          ok: false,
+          message: "사용자를 찾을 수 없습니다.",
+        });
+        return;
+      }
+
+      socket.emit("user:status-result", {
+        ok: true,
+        penaltyPoints: user.penaltyPoints,
+        isBanned: user.isBanned,
+        muteUntil: user.muteUntil ? user.muteUntil.toISOString() : null,
+      });
+    } catch (err) {
+      console.error("user:status 에러:", err);
+      socket.emit("user:status-result", {
+        ok: false,
+        message: "상태 조회 중 오류가 발생했습니다.",
+      });
+    }
+  });
+
+  socket.on("room:create", async ({ name }) => {
+    const trimmed = (name || "").trim();
+    if (!trimmed) {
+      socket.emit("room:create-result", {
+        ok: false,
+        message: "방 이름은 필수입니다.",
+      });
+      return;
+    }
+
+    try {
+      const userId = socket.data.userId;
+      const [result] = await pool.query(
+        "INSERT INTO rooms (name, max_users, created_by_user_id) VALUES (?, ?, ?)",
+        [trimmed, 5, userId]
+      );
+
+      const room = {
+        id: result.insertId,
+        name: trimmed,
+        maxUsers: 5,
+        currentUsers: 0,
+      };
+
+      socket.emit("room:create-result", { ok: true, room });
+      io.emit("room:created", room);
+    } catch (err) {
+      console.error("room:create 에러:", err);
+      socket.emit("room:create-result", {
+        ok: false,
+        message: "방 생성 중 오류가 발생했습니다.",
+      });
+    }
+  });
+
+  socket.on("room:list", async () => {
+    try {
+      const [rows] = await pool.query(
+        "SELECT id, name, max_users FROM rooms ORDER BY id DESC"
+      );
+
+      const list = rows.map((r) => {
+        const key = String(r.id);
+        const room = io.sockets.adapter.rooms.get(key);
+        const current = room ? room.size : 0;
+        return {
+          id: r.id,
+          name: r.name,
+          maxUsers: r.max_users,
+          currentUsers: current,
+        };
+      });
+
+      socket.emit("room:list-result", list);
+    } catch (err) {
+      console.error("room:list 에러:", err);
+      socket.emit("room:list-result", []);
+    }
+  });
+
+  socket.on("chat:join", async ({ roomId }) => {
     if (!roomId) return;
-    socket.join(roomId);
-    console.log(`유저 ${socket.data.userId} 이(가) 방 ${roomId} 에 입장`);
+
+    try {
+      const [rows] = await pool.query(
+        "SELECT id, name, max_users FROM rooms WHERE id = ?",
+        [roomId]
+      );
+      if (rows.length === 0) {
+        socket.emit("room:join-result", {
+          ok: false,
+          message: "존재하지 않는 방입니다.",
+        });
+        return;
+      }
+
+      const roomRow = rows[0];
+      const roomKey = String(roomRow.id);
+      const room = io.sockets.adapter.rooms.get(roomKey);
+      const current = room ? room.size : 0;
+
+      if (current >= roomRow.max_users) {
+        socket.emit("room:join-result", {
+          ok: false,
+          message: "방 인원이 가득 찼습니다. (최대 5명)",
+        });
+        return;
+      }
+
+      if (socket.data.roomId && socket.data.roomId !== roomRow.id) {
+        socket.leave(String(socket.data.roomId));
+      }
+
+      socket.join(roomKey);
+      socket.data.roomId = roomRow.id;
+
+      const newCurrent = current + 1;
+
+      socket.emit("room:join-result", {
+        ok: true,
+        roomId: roomRow.id,
+        roomName: roomRow.name,
+      });
+
+      io.emit("room:user-count-changed", {
+        roomId: roomRow.id,
+        currentUsers: newCurrent,
+      });
+
+      console.log(
+        `유저 ${socket.data.userId}가 방 ${roomRow.id} 입장 (현재 ${newCurrent}명)`
+      );
+    } catch (err) {
+      console.error("chat:join 에러:", err);
+      socket.emit("room:join-result", {
+        ok: false,
+        message: "방 입장 중 오류가 발생했습니다.",
+      });
+    }
   });
 
   socket.on("chat:send", async ({ roomId, message }) => {
@@ -283,9 +464,20 @@ io.on("connection", (socket) => {
       }
 
       if (isUserMuted(user)) {
+        let msg = "현재 채팅 제한(mute) 상태입니다.";
+        if (user.muteUntil) {
+          const until = user.muteUntil;
+          const yyyy = until.getFullYear();
+          const mm = String(until.getMonth() + 1).padStart(2, "0");
+          const dd = String(until.getDate()).padStart(2, "0");
+          const hh = String(until.getHours()).padStart(2, "0");
+          const mi = String(until.getMinutes()).padStart(2, "0");
+          msg += ` 해제 예정 시각: ${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+        }
+
         socket.emit("chat:receive", {
           nickname: "SYSTEM",
-          message: "현재 채팅 제한(mute) 상태입니다.",
+          message: msg,
         });
         return;
       }
@@ -293,7 +485,18 @@ io.on("connection", (socket) => {
       const { score, maskedMessage } = evaluateMessage(message);
       console.log(`방 ${roomId} / ${nickname}: "${message}" (score=${score})`);
 
-      const penaltyResult = await applyPenalty(user, score);
+      let abuseLogId = null;
+      if (score > 0) {
+        abuseLogId = await logAbuse({
+          userId,
+          roomId,
+          original: message,
+          masked: maskedMessage,
+          score,
+        });
+      }
+
+      const penaltyResult = await applyPenalty(user, score, abuseLogId, roomId);
 
       if (user.isBanned) {
         socket.emit("chat:receive", {
@@ -304,10 +507,21 @@ io.on("connection", (socket) => {
         return;
       }
 
-      if (isUserMuted(user)) {
+      if (penaltyResult === "muted" && isUserMuted(user)) {
+        let msg = "욕설로 인해 일정 시간 동안 채팅이 제한되었습니다.";
+        if (user.muteUntil) {
+          const until = user.muteUntil;
+          const yyyy = until.getFullYear();
+          const mm = String(until.getMonth() + 1).padStart(2, "0");
+          const dd = String(until.getDate()).padStart(2, "0");
+          const hh = String(until.getHours()).padStart(2, "0");
+          const mi = String(until.getMinutes()).padStart(2, "0");
+          msg += ` 해제 예정 시각: ${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+        }
+
         socket.emit("chat:receive", {
           nickname: "SYSTEM",
-          message: "욕설로 인해 일정 시간 동안 채팅이 제한되었습니다.",
+          message: msg,
         });
         return;
       }
@@ -322,9 +536,17 @@ io.on("connection", (socket) => {
 
       const finalMessage = score > 0 ? maskedMessage : message;
 
-      io.to(roomId).emit("chat:receive", {
+      const [msgResult] = await pool.query(
+        "INSERT INTO chat_messages (room_id, user_id, nickname, original_message, masked_message, score) VALUES (?, ?, ?, ?, ?, ?)",
+        [roomId, user.id, nickname, message, finalMessage, score]
+      );
+      const messageId = msgResult.insertId;
+
+      io.to(String(roomId)).emit("chat:receive", {
         nickname,
         message: finalMessage,
+        userId: user.id,
+        messageId,
       });
     } catch (err) {
       console.error("chat:send 처리 중 에러", err);
@@ -337,6 +559,17 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("클라이언트 연결 종료:", socket.id);
+
+    const roomId = socket.data.roomId;
+    if (roomId) {
+      const roomKey = String(roomId);
+      const room = io.sockets.adapter.rooms.get(roomKey);
+      const current = room ? room.size : 0;
+      io.emit("room:user-count-changed", {
+        roomId,
+        currentUsers: current,
+      });
+    }
   });
 });
 

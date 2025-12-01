@@ -2,38 +2,207 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <title>로그인 / 회원가입</title>
+    <title>Login - Abuse Chat Filter</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+        font-size: 12px;
+      }
+
+      body {
+        background: #008080;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: #000000;
+      }
+
+      .win98-window {
+        width: 720px;
+        max-width: 95vw;
+        background: #c0c0c0;
+        border: 2px solid #000000;
+        box-shadow: 2px 2px 0 #000000;
+      }
+
+      .title-bar {
+        background: linear-gradient(90deg, #000080, #1084d0);
+        color: #ffffff;
+        padding: 3px 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .title-bar-text {
+        font-weight: bold;
+      }
+
+      .title-bar-controls button {
+        width: 16px;
+        height: 14px;
+        border: 1px solid #ffffff;
+        background: #c0c0c0;
+        padding: 0;
+        margin-left: 2px;
+        box-shadow: inset -1px -1px 0 #000000, inset 1px 1px 0 #ffffff;
+      }
+
+      .window-body {
+        padding: 8px;
+        display: grid;
+        grid-template-columns: 1.1fr 1.1fr;
+        gap: 8px;
+      }
+
+      .group-box {
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        padding: 8px;
+        margin-bottom: 4px;
+        background: #c0c0c0;
+        position: relative;
+      }
+
+      .group-box-title {
+        position: absolute;
+        top: -8px;
+        left: 8px;
+        padding: 0 4px;
+        background: #c0c0c0;
+        font-weight: bold;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 2px;
+      }
+
+      input[type="email"],
+      input[type="password"],
+      input[type="text"] {
+        width: 100%;
+        padding: 2px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #ffffff;
+        outline: none;
+        margin-bottom: 6px;
+      }
+
+      input[type="email"]:focus,
+      input[type="password"]:focus,
+      input[type="text"]:focus {
+        border: 2px solid #000080;
+      }
+
+      .btn {
+        padding: 2px 12px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #c0c0c0;
+        box-shadow: inset -1px -1px 0 #000000, inset 1px 1px 0 #ffffff;
+        cursor: pointer;
+        margin-left: 4px;
+      }
+
+      .btn:active {
+        box-shadow: inset 1px 1px 0 #000000, inset -1px -1px 0 #ffffff;
+        background: #a0a0a0;
+      }
+
+      .btn-row {
+        display: flex;
+        justify-content: flex-end;
+        margin-top: 4px;
+      }
+
+      .log-area {
+        width: 100%;
+        height: 120px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #ffffff;
+        padding: 4px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-family: "Courier New", monospace;
+        font-size: 11px;
+      }
+
+      .split-col {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      @media (max-width: 640px) {
+        .window-body {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
   </head>
   <body>
-    <h1>로그인 / 회원가입</h1>
+    <div class="win98-window">
+      <div class="title-bar">
+        <div class="title-bar-text">Abuse Chat Filter - Login</div>
+        <div class="title-bar-controls">
+          <button aria-label="Minimize"></button>
+          <button aria-label="Maximize"></button>
+          <button aria-label="Close"></button>
+        </div>
+      </div>
+      <div class="window-body">
+        <!-- 왼쪽: 간단 시스템 로그 -->
+        <div class="split-col">
+          <div class="group-box">
+            <div class="group-box-title">System Log</div>
+            <div id="log" class="log-area"></div>
+          </div>
+        </div>
 
-    <h2>회원가입</h2>
-    <div>
-      <label>이메일: <input id="reg-email" type="email" /></label>
-    </div>
-    <div>
-      <label>비밀번호: <input id="reg-password" type="password" /></label>
-    </div>
-    <div>
-      <label>닉네임: <input id="reg-nickname" /></label>
-    </div>
-    <button id="registerBtn">회원가입</button>
+        <!-- 오른쪽: 회원가입 / 로그인 -->
+        <div class="split-col">
+          <div class="group-box">
+            <div class="group-box-title">Sign Up</div>
+            <label for="reg-email">이메일</label>
+            <input id="reg-email" type="email" />
 
-    <hr />
+            <label for="reg-password">비밀번호</label>
+            <input id="reg-password" type="password" />
 
-    <h2>로그인</h2>
-    <div>
-      <label>이메일: <input id="login-email" type="email" /></label>
-    </div>
-    <div>
-      <label>비밀번호: <input id="login-password" type="password" /></label>
-    </div>
-    <button id="loginBtn">로그인</button>
+            <label for="reg-nickname">닉네임</label>
+            <input id="reg-nickname" type="text" />
 
-    <pre
-      id="log"
-      style="border: 1px solid #ccc; height: 150px; overflow-y: auto"
-    ></pre>
+            <div class="btn-row">
+              <button id="registerBtn" class="btn">회원가입</button>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <div class="group-box-title">Login</div>
+            <label for="login-email">이메일</label>
+            <input id="login-email" type="email" />
+
+            <label for="login-password">비밀번호</label>
+            <input id="login-password" type="password" />
+
+            <div class="btn-row">
+              <button id="loginBtn" class="btn">로그인</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
 
     <script>
       const regEmailInput = document.getElementById("reg-email");
@@ -52,14 +221,13 @@
         logEl.scrollTop = logEl.scrollHeight;
       }
 
-      // 회원가입 버튼 클릭
       registerBtn.onclick = async () => {
         const email = regEmailInput.value.trim();
         const password = regPasswordInput.value.trim();
         const nickname = regNicknameInput.value.trim();
 
         if (!email || !password || !nickname) {
-          alert("이메일, 비밀번호, 닉네임을 모두 입력하세요.");
+          alert("이메일, 비밀번호, 닉네임을 모두 입력하십시오.");
           return;
         }
 
@@ -79,7 +247,7 @@
           }
 
           log("[SYSTEM] 회원가입 성공: " + nickname);
-          alert("회원가입이 완료되었습니다. 아래 로그인 폼에서 로그인하세요.");
+          alert("회원가입이 완료되었습니다.");
         } catch (e) {
           console.error(e);
           alert("회원가입 중 오류가 발생했습니다.");
@@ -87,13 +255,12 @@
         }
       };
 
-      // 로그인 버튼 클릭
       loginBtn.onclick = async () => {
         const email = loginEmailInput.value.trim();
         const password = loginPasswordInput.value.trim();
 
         if (!email || !password) {
-          alert("이메일/비밀번호를 입력하세요.");
+          alert("이메일/비밀번호를 입력하십시오.");
           return;
         }
 
@@ -112,23 +279,18 @@
             return;
           }
 
-          const token = data.token;
-          const nickname = data.nickname;
-
-          if (!token) {
-            alert(
-              "토큰이 응답에 없습니다. 백엔드 코드를 다시 확인해야 합니다."
-            );
+          if (!data.token) {
+            alert("토큰이 응답에 없습니다. 백엔드 코드를 확인해야 합니다.");
             return;
           }
 
-          // 토큰과 닉네임을 localStorage에 저장
-          localStorage.setItem("authToken", token);
-          localStorage.setItem("nickname", nickname);
+          localStorage.setItem("authToken", data.token);
+          localStorage.setItem("userId", String(data.userId));
+          localStorage.setItem("nickname", data.nickname);
+          localStorage.setItem("isAdmin", data.isAdmin ? "1" : "0");
 
-          log("[SYSTEM] 로그인 성공: " + nickname);
-          alert("로그인 성공, 채팅 페이지로 이동합니다.");
-          window.location.href = "/chat.html";
+          log("[SYSTEM] 로그인 성공: " + data.nickname);
+          window.location.href = "/lobby.html";
         } catch (e) {
           console.error(e);
           alert("로그인 중 오류가 발생했습니다.");
