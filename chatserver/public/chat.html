@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Chat - Abuse Chat Filter</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+        font-size: 12px;
+      }
+
+      body {
+        background: #008080;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: #000000;
+      }
+
+      .win98-window {
+        width: 900px;
+        max-width: 95vw;
+        background: #c0c0c0;
+        border: 2px solid #000000;
+        box-shadow: 2px 2px 0 #000000;
+      }
+
+      .title-bar {
+        background: linear-gradient(90deg, #000080, #1084d0);
+        color: #ffffff;
+        padding: 3px 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .title-bar-text {
+        font-weight: bold;
+      }
+
+      .title-bar-controls button {
+        width: 16px;
+        height: 14px;
+        border: 1px solid #ffffff;
+        background: #c0c0c0;
+        padding: 0;
+        margin-left: 2px;
+        box-shadow: inset -1px -1px 0 #000000, inset 1px 1px 0 #ffffff;
+      }
+
+      .window-body {
+        padding: 8px;
+      }
+
+      .top-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
+      }
+
+      .group-box {
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        padding: 8px;
+        margin-bottom: 6px;
+        background: #c0c0c0;
+        position: relative;
+      }
+
+      .group-box-title {
+        position: absolute;
+        top: -8px;
+        left: 8px;
+        padding: 0 4px;
+        background: #c0c0c0;
+        font-weight: bold;
+      }
+
+      .btn {
+        padding: 2px 12px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #c0c0c0;
+        box-shadow: inset -1px -1px 0 #000000, inset 1px 1px 0 #ffffff;
+        cursor: pointer;
+        margin-left: 4px;
+      }
+
+      .btn:active {
+        box-shadow: inset 1px 1px 0 #000000, inset -1px -1px 0 #ffffff;
+        background: #a0a0a0;
+      }
+
+      input[type="text"] {
+        width: 100%;
+        padding: 2px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #ffffff;
+        outline: none;
+        margin-bottom: 4px;
+      }
+
+      input[type="text"]:focus {
+        border: 2px solid #000080;
+      }
+
+      .log-area {
+        width: 100%;
+        height: 340px; /* 채팅창을 조금 더 크게 */
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #ffffff;
+        padding: 4px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-family: "Courier New", monospace;
+        font-size: 11px;
+      }
+
+      .chat-row {
+        display: flex;
+        gap: 4px;
+        align-items: center;
+        margin-top: 4px;
+      }
+
+      @media (max-width: 820px) {
+        .win98-window {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="win98-window">
+      <div class="title-bar">
+        <div class="title-bar-text">Abuse Chat Filter - Chat</div>
+        <div class="title-bar-controls">
+          <button aria-label="Minimize"></button>
+          <button aria-label="Maximize"></button>
+          <button aria-label="Close"></button>
+        </div>
+      </div>
+
+      <div class="window-body">
+        <div class="top-bar">
+          <span>실시간 채팅</span>
+          <button id="logoutBtn" class="btn">로그아웃</button>
+        </div>
+
+        <div class="group-box">
+          <div class="group-box-title">채팅 로그</div>
+          <div id="chatLog" class="log-area"></div>
+        </div>
+
+        <div class="group-box">
+          <div class="group-box-title">메시지</div>
+          <div class="chat-row">
+            <input
+              id="message"
+              type="text"
+              placeholder="메시지를 입력하십시오."
+            />
+            <button id="sendBtn" class="btn">전송</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const msgInput = document.getElementById("message");
+      const sendBtn = document.getElementById("sendBtn");
+      const logEl = document.getElementById("log");
+      const chatLogEl = document.getElementById("chatLog");
+      const logoutBtn = document.getElementById("logoutBtn");
+
+      let socket = null;
+      let currentRoomId = null;
+      let currentUserId = null;
+
+      function log(text) {
+        if (chatLogEl) {
+          chatLogEl.textContent += text + "\n";
+          chatLogEl.scrollTop = chatLogEl.scrollHeight;
+        } else {
+          logEl.textContent += text + "\n";
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+      }
+
+      function ensureAuth() {
+        const token = localStorage.getItem("authToken");
+        const nickname = localStorage.getItem("nickname");
+        const roomId = localStorage.getItem("roomId");
+        const userId = localStorage.getItem("userId");
+
+        if (!token || !nickname) {
+          alert("로그인 정보가 없습니다. 로그인 페이지로 이동합니다.");
+          window.location.href = "/";
+          return null;
+        }
+
+        if (!roomId) {
+          alert("선택된 방 정보가 없습니다. 로비로 이동합니다.");
+          window.location.href = "/lobby.html";
+          return null;
+        }
+
+        currentUserId = userId ? Number(userId) : null;
+        return {
+          token,
+          nickname,
+          roomId: Number(roomId),
+          userId: currentUserId,
+        };
+      }
+
+      function connectSocket(token, roomId) {
+        socket = io("http://localhost:3000", {
+          auth: { token },
+        });
+
+        socket.on("connect", () => {
+          log("[SYSTEM] 서버에 연결되었습니다.");
+          socket.emit("chat:join", { roomId: Number(roomId) });
+        });
+
+        socket.on("disconnect", () => {
+          log("[SYSTEM] 서버에서 연결이 끊어졌습니다.");
+        });
+
+        socket.on("connect_error", (err) => {
+          log("[ERROR] 소켓 연결 오류: " + err.message);
+        });
+
+        socket.on("room:join-result", (res) => {
+          if (!res.ok) {
+            const msg = res.message || "방 입장에 실패했습니다.";
+            log(`[SYSTEM] ${msg}`);
+            alert(msg);
+            return;
+          }
+
+          currentRoomId = res.roomId;
+          if (res.roomId) {
+            localStorage.setItem("roomId", String(res.roomId));
+          }
+          const roomLabel = res.roomName || res.roomId;
+          log(`[SYSTEM] {${roomLabel}} 에 입장했습니다.`);
+        });
+
+        socket.on("chat:receive", (payload) => {
+          appendChatMessage(payload);
+        });
+      }
+
+      function appendChatMessage({ nickname, message }) {
+        if (!chatLogEl) return;
+
+        const line = document.createElement("div");
+        line.textContent = `${nickname}: ${message}`;
+        chatLogEl.appendChild(line);
+        chatLogEl.scrollTop = chatLogEl.scrollHeight;
+      }
+
+      const auth = ensureAuth();
+      if (auth) {
+        currentRoomId = auth.roomId;
+        connectSocket(auth.token, auth.roomId);
+        log("[SYSTEM] 로그인된 사용자: " + auth.nickname);
+      }
+
+      sendBtn.onclick = () => {
+        if (!socket || !socket.connected) {
+          alert("소켓이 연결되지 않았습니다.");
+          return;
+        }
+        if (!currentRoomId) {
+          alert("방 정보가 없습니다. 다시 입장하십시오.");
+          return;
+        }
+        const message = msgInput.value.trim();
+        if (!message) return;
+        socket.emit("chat:send", { roomId: currentRoomId, message });
+        msgInput.value = "";
+      };
+
+      msgInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          sendBtn.click();
+        }
+      });
+
+      logoutBtn.onclick = () => {
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("nickname");
+        localStorage.removeItem("roomId");
+        alert("로그아웃되었습니다.");
+        window.location.href = "/";
+      };
+    </script>
+  </body>
+</html>

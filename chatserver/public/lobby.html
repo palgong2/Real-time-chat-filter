@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Lobby - Abuse Chat Filter</title>
+    <style>
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+        font-family: "MS Sans Serif", Tahoma, Arial, sans-serif;
+        font-size: 12px;
+      }
+
+      body {
+        background: #008080;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        color: #000000;
+      }
+
+      .win98-window {
+        width: 820px;
+        max-width: 95vw;
+        background: #c0c0c0;
+        border: 2px solid #000000;
+        box-shadow: 2px 2px 0 #000000;
+      }
+
+      .title-bar {
+        background: linear-gradient(90deg, #000080, #1084d0);
+        color: #ffffff;
+        padding: 3px 4px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .title-bar-text {
+        font-weight: bold;
+      }
+
+      .title-bar-controls button {
+        width: 16px;
+        height: 14px;
+        border: 1px solid #ffffff;
+        background: #c0c0c0;
+        padding: 0;
+        margin-left: 2px;
+        box-shadow: inset -1px -1px 0 #000000, inset 1px 1px 0 #ffffff;
+      }
+
+      .window-body {
+        padding: 8px;
+        display: grid;
+        grid-template-columns: 1.1fr 1.1fr;
+        gap: 8px;
+      }
+
+      .group-box {
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        padding: 8px;
+        margin-bottom: 6px;
+        background: #c0c0c0;
+        position: relative;
+      }
+
+      .group-box-title {
+        position: absolute;
+        top: -8px;
+        left: 8px;
+        padding: 0 4px;
+        background: #c0c0c0;
+        font-weight: bold;
+      }
+
+      input[type="text"] {
+        width: 100%;
+        padding: 2px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #ffffff;
+        outline: none;
+        margin-bottom: 4px;
+      }
+
+      input[type="text"]:focus {
+        border: 2px solid #000080;
+      }
+
+      .btn {
+        padding: 2px 12px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #c0c0c0;
+        box-shadow: inset -1px -1px 0 #000000, inset 1px 1px 0 #ffffff;
+        cursor: pointer;
+        margin-left: 4px;
+      }
+
+      .btn:active {
+        box-shadow: inset 1px 1px 0 #000000, inset -1px -1px 0 #ffffff;
+        background: #a0a0a0;
+      }
+
+      .btn-row-right {
+        display: flex;
+        justify-content: flex-end;
+        gap: 4px;
+        margin-bottom: 6px;
+      }
+
+      .log-area {
+        width: 100%;
+        height: 120px;
+        border: 2px solid #808080;
+        border-top-color: #ffffff;
+        border-left-color: #ffffff;
+        background: #ffffff;
+        padding: 4px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        font-family: "Courier New", monospace;
+        font-size: 11px;
+      }
+
+      #roomList {
+        font-size: 12px;
+        color: #000000;
+      }
+
+      ul.room-ul {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+      }
+
+      li.room-li {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 0;
+        border-bottom: 1px solid #808080;
+      }
+
+      .room-info {
+        font-size: 12px;
+      }
+
+      @media (max-width: 760px) {
+        .window-body {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="win98-window">
+      <div class="title-bar">
+        <div class="title-bar-text">Abuse Chat Filter - Lobby</div>
+        <div class="title-bar-controls">
+          <button aria-label="Minimize"></button>
+          <button aria-label="Maximize"></button>
+          <button aria-label="Close"></button>
+        </div>
+      </div>
+      <div class="window-body">
+        <!-- 왼쪽: 방 생성 + 로그 -->
+        <div>
+          <div class="group-box">
+            <div class="group-box-title">방 생성</div>
+            <label for="roomName">방 이름</label>
+            <input id="roomName" type="text" placeholder="예: 일반 채팅방" />
+            <button id="createRoomBtn" class="btn">방 생성</button>
+          </div>
+
+          <div class="group-box">
+            <div class="group-box-title">System Log</div>
+            <div id="log" class="log-area"></div>
+          </div>
+        </div>
+
+        <!-- 오른쪽: 방 목록 / 이동 / 로그아웃 -->
+        <div>
+          <div class="btn-row-right">
+            <button id="logoutBtn" class="btn">로그아웃</button>
+            <button id="goChatBtn" class="btn">선택한 방으로 이동</button>
+          </div>
+
+          <div class="group-box">
+            <div class="group-box-title">방 목록 (최대 5인)</div>
+            <div id="roomList">로딩 중...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const roomNameInput = document.getElementById("roomName");
+      const createRoomBtn = document.getElementById("createRoomBtn");
+      const roomListContainer = document.getElementById("roomList");
+      const logEl = document.getElementById("log");
+      const logoutBtn = document.getElementById("logoutBtn");
+      const goChatBtn = document.getElementById("goChatBtn");
+      const adminBtn = document.getElementById("adminBtn");
+
+      let socket = null;
+      let selectedRoomId = null;
+
+      function log(text) {
+        logEl.textContent += text + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function ensureAuth() {
+        const token = localStorage.getItem("authToken");
+        const nickname = localStorage.getItem("nickname");
+
+        if (!token || !nickname) {
+          alert("로그인 정보가 없습니다. 로그인 페이지로 이동합니다.");
+          window.location.href = "/";
+          return null;
+        }
+
+        return { token, nickname };
+      }
+
+      function connectSocket(token) {
+        socket = io("http://localhost:3000", {
+          auth: { token },
+        });
+
+        socket.on("connect", () => {
+          log("[SYSTEM] 서버에 연결되었습니다.");
+          socket.emit("room:list");
+        });
+
+        socket.on("disconnect", () => {
+          log("[SYSTEM] 서버와의 연결이 끊어졌습니다.");
+        });
+
+        socket.on("connect_error", (err) => {
+          log("[ERROR] 소켓 연결 오류: " + err.message);
+        });
+
+        socket.on("room:list-result", (rooms) => {
+          renderRoomList(rooms);
+        });
+
+        socket.on("room:create-result", (res) => {
+          if (!res.ok) {
+            alert(res.message || "방 생성에 실패했습니다.");
+            log("[ERROR] 방 생성 실패: " + (res.message || ""));
+            return;
+          }
+          const roomId = res.room.id;
+          log(
+            "[SYSTEM] 방 생성 성공: " + res.room.name + " (ID=" + roomId + ")"
+          );
+          roomNameInput.value = "";
+          // 생성한 유저는 자동 입장
+          localStorage.setItem("roomId", String(roomId));
+          window.location.href = "/chat.html";
+        });
+
+        socket.on("room:created", (room) => {
+          log("[SYSTEM] 새 방 생성: " + room.name + " (ID=" + room.id + ")");
+          socket.emit("room:list");
+        });
+
+        socket.on("room:user-count-changed", ({ roomId, currentUsers }) => {
+          socket.emit("room:list");
+        });
+      }
+
+      function renderRoomList(rooms) {
+        roomListContainer.innerHTML = "";
+
+        if (!rooms || rooms.length === 0) {
+          roomListContainer.textContent = "생성된 방이 없습니다.";
+          selectedRoomId = null;
+          return;
+        }
+
+        const ul = document.createElement("ul");
+        ul.className = "room-ul";
+
+        rooms.forEach((room) => {
+          const li = document.createElement("li");
+          li.className = "room-li";
+
+          const info = document.createElement("div");
+          info.className = "room-info";
+          info.textContent = `${room.name}  (${room.currentUsers}/${room.maxUsers})`;
+
+          const btn = document.createElement("button");
+          btn.textContent = "선택";
+          btn.className = "btn";
+          btn.disabled = room.currentUsers >= room.maxUsers;
+
+          btn.onclick = () => {
+            if (room.currentUsers >= room.maxUsers) {
+              alert("이 방은 이미 5명으로 가득 찼습니다.");
+              return;
+            }
+            selectedRoomId = room.id;
+            log("[SYSTEM] 선택된 방: " + room.name + " (ID=" + room.id + ")");
+          };
+
+          li.appendChild(info);
+          li.appendChild(btn);
+          ul.appendChild(li);
+        });
+
+        roomListContainer.appendChild(ul);
+      }
+
+      createRoomBtn.onclick = () => {
+        if (!socket || !socket.connected) {
+          alert("소켓이 연결되지 않았습니다.");
+          return;
+        }
+        const name = roomNameInput.value.trim();
+        if (!name) {
+          alert("방 이름을 입력하십시오.");
+          return;
+        }
+        socket.emit("room:create", { name });
+      };
+
+      logoutBtn.onclick = () => {
+        localStorage.removeItem("authToken");
+        localStorage.removeItem("nickname");
+        localStorage.removeItem("roomId");
+        alert("로그아웃되었습니다.");
+        window.location.href = "/";
+      };
+
+      goChatBtn.onclick = () => {
+        if (!selectedRoomId) {
+          alert("먼저 입장할 방을 선택하십시오.");
+          return;
+        }
+        localStorage.setItem("roomId", String(selectedRoomId));
+        window.location.href = "/chat.html";
+      };
+
+      const isAdmin = localStorage.getItem("isAdmin") === "1";
+      if (adminBtn) {
+        if (isAdmin) {
+          adminBtn.style.display = "inline-block";
+          adminBtn.onclick = () => {
+            window.location.href = "/admin.html";
+          };
+        } else {
+          adminBtn.style.display = "none";
+        }
+      }
+
+      const auth = ensureAuth();
+      if (auth) {
+        connectSocket(auth.token);
+        log("[SYSTEM] 로그인된 사용자: " + auth.nickname);
+      }
+    </script>
+  </body>
+</html>
