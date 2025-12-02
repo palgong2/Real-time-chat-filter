@@ -1,3 +1,4 @@
+// index.js
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -5,51 +6,49 @@ const path = require("path");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
-// const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-// const {
-//   DynamoDBDocumentClient,
-//   PutCommand,
-//   QueryCommand,
-// } = require("@aws-sdk/lib-dynamodb");
+
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  QueryCommand,
+} = require("@aws-sdk/lib-dynamodb");
 
 // ===== 기본 설정들 =====
-const JWT_SECRET = "dev-secret-change-later"; // 원래 쓰던 값
-// const AWS_REGION = "ap-northeast-2";
-// const DDB_CHAT_TABLE = "ChatMessages";
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-later";
+const AWS_REGION = process.env.AWS_REGION || "ap-northeast-2";
+const DDB_CHAT_TABLE = process.env.DDB_CHAT_TABLE || "ChatMessages";
 const INSTANCE_ID = process.env.INSTANCE_ID || "local-dev";
 
 // DynamoDB 클라이언트
-// const ddbClient = new DynamoDBClient({ region: AWS_REGION });
-// const ddb = DynamoDBDocumentClient.from(ddbClient, {
-//   marshallOptions: {
-//     removeUndefinedValues: true,
-//   },
-// });
+const ddbClient = new DynamoDBClient({ region: AWS_REGION });
+const ddb = DynamoDBDocumentClient.from(ddbClient, {
+  marshallOptions: { removeUndefinedValues: true },
+});
 
 // 여러 인스턴스/방 상태 관리용
-// const activeRooms = new Set();
-// const lastSeenPerRoom = new Map();
+const activeRooms = new Set(); // 이 인스턴스에서 사용 중인 roomId 목록
+const lastSeenPerRoom = new Map(); // roomId -> 마지막으로 본 messageId
 
 // Express 앱 생성
 const app = express();
 app.use(express.json());
 
+// ---------------- 욕설 필터 관련 ----------------
 const PROFANITY_LIST = [
   { pattern: "욕1", score: 5 },
   { pattern: "욕2", score: 10 },
   { pattern: "욕3", score: 20 },
 ];
 
-// 메시지 전처리 (공백/특수문자 제거 등)
 function normalizeMessage(msg) {
   if (!msg) return "";
   return msg
-    .toLowerCase() // 소문자
-    .replace(/\s+/g, "") // 공백 제거
-    .replace(/[^\w가-힣]/g, ""); // 특수문자 제거 (한글/영문/숫자만 남김)
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[^\w가-힣]/g, "");
 }
 
-// 욕설 점수 계산 + 마스킹
 function evaluateMessage(original) {
   const normalized = normalizeMessage(original);
   let totalScore = 0;
@@ -68,16 +67,33 @@ function evaluateMessage(original) {
     }
   }
 
-  return {
-    score: totalScore,
-    maskedMessage: masked,
-  };
+  return { score: totalScore, maskedMessage: masked };
+}
+
+// ---------------- RDS 쪽 유저/제재 로직 ----------------
+async function getRecentAbuseLogs(userId, limit = 5) {
+  const [rows] = await pool.query(
+    `
+    SELECT room_id, original_message, masked_message, score, created_at
+    FROM abuse_logs
+    WHERE user_id = ?
+    ORDER BY created_at DESC
+    LIMIT ?
+    `,
+    [userId, limit]
+  );
+  return rows;
 }
 
 async function notifyBanByEmailPlaceholder(user, abuseLogId, roomId, score) {
-  console.log(
-    `[BAN] user_id=${user.id}, room=${roomId}, abuse_log_id=${abuseLogId}, score=${score}`
-  );
+  const logs = await getRecentAbuseLogs(user.id, 5);
+
+  // TODO: 여기서 logs를 문자열로 예쁘게 포맷해서
+  // AWS SNS(또는 SES)로 user.email에 전송하는 코드 넣을 예정
+  console.log("=== BAN NOTIFY START ===");
+  console.log("정지 대상 이메일:", user.email);
+  console.log("최근 욕설 로그 예시:", logs);
+  console.log("=== BAN NOTIFY END ===");
 }
 
 async function logAbuse({ userId, roomId, original, masked, score }) {
@@ -95,13 +111,11 @@ async function logAbuse({ userId, roomId, original, masked, score }) {
   }
 }
 
-// DB에서 유저 조회
 async function findUserById(userId) {
   const [rows] = await pool.query(
     "SELECT id, email, nickname, penalty_points, is_banned, mute_until FROM users WHERE id = ?",
     [userId]
   );
-
   const row = rows[0];
   if (!row) return null;
 
@@ -115,7 +129,6 @@ async function findUserById(userId) {
   };
 }
 
-// 벌점 적용 규칙 (원하는 대로 조정 가능)
 async function applyPenalty(user, score, abuseLogId = null, roomId = null) {
   if (!user || score <= 0) return null;
 
@@ -146,7 +159,6 @@ async function applyPenalty(user, score, abuseLogId = null, roomId = null) {
   user.isBanned = newIsBanned;
   user.muteUntil = newMuteUntil;
 
-  // ★ 정지된 경우 ban_events에 한 줄 남기기
   if (result === "banned") {
     await pool.query(
       "INSERT INTO ban_events (user_id, abuse_log_id, room_id, score) VALUES (?, ?, ?, ?)",
@@ -159,28 +171,23 @@ async function applyPenalty(user, score, abuseLogId = null, roomId = null) {
   return result;
 }
 
-// mute 상태인지 확인
 function isUserMuted(user) {
   if (!user || !user.muteUntil) return false;
   return user.muteUntil > new Date();
 }
 
-// public 폴더를 정적 파일로 서빙
+// ---------------- 정적 파일/헬스체크 ----------------
 app.use(express.static(path.join(__dirname, "public")));
 
-// 헬스 체크용 엔드포인트
 app.get("/health", (req, res) => {
   res.send("ok");
 });
 
-// 어떤 인스턴스인지 확인용
 app.get("/whoami", (req, res) => {
-  res.json({
-    instanceId: INSTANCE_ID,
-  });
+  res.json({ instanceId: INSTANCE_ID });
 });
 
-// 회원가입
+// ---------------- REST: 회원가입 / 로그인 ----------------
 app.post("/auth/register", async (req, res) => {
   const { email, password, nickname } = req.body;
 
@@ -194,7 +201,6 @@ app.post("/auth/register", async (req, res) => {
     const [rows] = await pool.query("SELECT id FROM users WHERE email = ?", [
       email,
     ]);
-
     if (rows.length > 0) {
       return res.status(409).json({ message: "이미 사용 중인 이메일입니다." });
     }
@@ -217,7 +223,6 @@ app.post("/auth/register", async (req, res) => {
   }
 });
 
-// 로그인
 app.post("/auth/login", async (req, res) => {
   const { email, password } = req.body;
 
@@ -237,7 +242,6 @@ app.post("/auth/login", async (req, res) => {
     }
 
     const user = rows[0];
-
     const ok = bcrypt.compareSync(password, user.password_hash);
     if (!ok) {
       return res
@@ -265,6 +269,7 @@ app.post("/auth/login", async (req, res) => {
       token,
       userId: user.id,
       nickname: user.nickname,
+      isAdmin: !!user.is_admin,
     });
   } catch (err) {
     console.error("로그인 에러:", err);
@@ -272,14 +277,13 @@ app.post("/auth/login", async (req, res) => {
   }
 });
 
-// HTTP 서버 + Socket.IO 붙이기
+// ---------------- HTTP 서버 + Socket.IO ----------------
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*",
-  },
+  cors: { origin: "*" },
 });
 
+// 소켓 인증
 io.use((socket, next) => {
   const token = socket.handshake.auth && socket.handshake.auth.token;
   if (!token) {
@@ -297,6 +301,92 @@ io.use((socket, next) => {
   }
 });
 
+// ---------------- DynamoDB Poller ----------------
+function startChatPoller() {
+  const POLL_INTERVAL_MS = 1000;
+
+  setInterval(async () => {
+    if (activeRooms.size === 0) return;
+
+    for (const roomId of activeRooms) {
+      try {
+        const numericRoomId = Number(roomId);
+        if (!numericRoomId || Number.isNaN(numericRoomId)) continue;
+
+        const lastSeen = lastSeenPerRoom.get(numericRoomId) || null;
+
+        let params;
+        if (lastSeen) {
+          params = {
+            TableName: DDB_CHAT_TABLE,
+            KeyConditionExpression:
+              "roomId = :roomId AND messageId > :lastMessageId",
+            ExpressionAttributeValues: {
+              ":roomId": numericRoomId,
+              ":lastMessageId": lastSeen,
+            },
+            ScanIndexForward: true, // 오래된 → 최신
+            Limit: 50,
+          };
+        } else {
+          params = {
+            TableName: DDB_CHAT_TABLE,
+            KeyConditionExpression: "roomId = :roomId",
+            ExpressionAttributeValues: {
+              ":roomId": numericRoomId,
+            },
+            ScanIndexForward: false, // 최신부터
+            Limit: 20,
+          };
+        }
+
+        const result = await ddb.send(new QueryCommand(params));
+        const items = result.Items || [];
+        if (items.length === 0) continue;
+
+        let ordered;
+        if (!lastSeen) {
+          ordered = items.slice().reverse(); // 오래된 → 최신
+          const lastItem = ordered[ordered.length - 1];
+          if (lastItem && lastItem.messageId) {
+            lastSeenPerRoom.set(numericRoomId, lastItem.messageId);
+          }
+          // 첫 로드는 과거 메시지 재전송 X
+          continue;
+        } else {
+          ordered = items; // 이미 오래된 → 최신 순
+        }
+
+        let latestMessageId = lastSeen;
+        for (const item of ordered) {
+          if (!item || !item.messageId) continue;
+
+          if (item.originInstanceId === INSTANCE_ID) {
+            latestMessageId = item.messageId;
+            continue;
+          }
+
+          io.to(String(numericRoomId)).emit("chat:receive", {
+            nickname: item.nickname || "익명",
+            message: item.body || "",
+            userId: item.senderUserId || null,
+            messageId: item.messageId,
+          });
+
+          latestMessageId = item.messageId;
+        }
+
+        if (latestMessageId && latestMessageId !== lastSeen) {
+          lastSeenPerRoom.set(numericRoomId, latestMessageId);
+        }
+      } catch (err) {
+        console.error("chat poller 에러 (roomId=" + roomId + "):", err);
+      }
+    }
+  }, POLL_INTERVAL_MS);
+}
+
+// ---------------- Socket.IO 이벤트 ----------------
 io.on("connection", (socket) => {
   console.log(
     "새 클라이언트 연결됨:",
@@ -304,105 +394,6 @@ io.on("connection", (socket) => {
     "userId:",
     socket.data.userId
   );
-
-  // function startChatPoller() {
-  //   const POLL_INTERVAL_MS = 1000; // 1초마다 폴링
-
-  //   setInterval(async () => {
-  //     // activeRooms가 비어 있으면 할 일이 없음
-  //     if (activeRooms.size === 0) {
-  //       return;
-  //     }
-
-  //     for (const roomId of activeRooms) {
-  //       try {
-  //         const numericRoomId = Number(roomId);
-  //         if (!numericRoomId || Number.isNaN(numericRoomId)) continue;
-
-  //         const lastSeen = lastSeenPerRoom.get(numericRoomId) || null;
-
-  //         let params;
-  //         if (lastSeen) {
-  //           // 마지막으로 본 messageId 이후의 것만 조회
-  //           params = {
-  //             TableName: DDB_CHAT_TABLE,
-  //             KeyConditionExpression:
-  //               "roomId = :roomId AND messageId > :lastMessageId",
-  //             ExpressionAttributeValues: {
-  //               ":roomId": numericRoomId,
-  //               ":lastMessageId": lastSeen,
-  //             },
-  //             ScanIndexForward: true, // 오래된 것 → 최신 순
-  //             Limit: 50,
-  //           };
-  //         } else {
-  //           // 처음 시작하는 방이면, 일단 최근 N개만 읽고 "포인터만 맞추고" 넘어감
-  //           params = {
-  //             TableName: DDB_CHAT_TABLE,
-  //             KeyConditionExpression: "roomId = :roomId",
-  //             ExpressionAttributeValues: {
-  //               ":roomId": numericRoomId,
-  //             },
-  //             ScanIndexForward: false, // 최신 것부터
-  //             Limit: 20,
-  //           };
-  //         }
-
-  //         const result = await ddb.send(new QueryCommand(params));
-  //         const items = result.Items || [];
-
-  //         if (items.length === 0) {
-  //           continue;
-  //         }
-
-  //         // 정렬 방향에 따라 순서 정리
-  //         let ordered;
-  //         if (!lastSeen) {
-  //           // 처음 읽을 때는 최신 → 오래된 순으로 왔으니, 뒤집어서 오래된 → 최신으로 맞춰둠
-  //           ordered = items.slice().reverse();
-  //           // 처음 한 번은 "예전 메시지들은 재전송하지 않고" 포인터만 세팅
-  //           const lastItem = ordered[ordered.length - 1];
-  //           if (lastItem && lastItem.messageId) {
-  //             lastSeenPerRoom.set(numericRoomId, lastItem.messageId);
-  //           }
-  //           continue; // 브로드캐스트는 하지 않음 (중복 방지)
-  //         } else {
-  //           // 이미 lastSeen이 있는 경우에는 오래된 → 최신 순으로 오도록 Query했으니 그대로 사용
-  //           ordered = items;
-  //         }
-
-  //         // 새로운 메시지들에 대해 브로드캐스트
-  //         let latestMessageId = lastSeen;
-  //         for (const item of ordered) {
-  //           if (!item || !item.messageId) continue;
-
-  //           // 이 메시지가 현재 인스턴스에서 생성된 거면 스킵
-  //           if (item.originInstanceId === INSTANCE_ID) {
-  //             latestMessageId = item.messageId;
-  //             continue;
-  //           }
-
-  //           const payload = {
-  //             nickname: item.nickname || "익명",
-  //             message: item.body || "",
-  //             userId: item.senderUserId || null,
-  //             // messageId를 굳이 넘기고 싶으면 넘기고, 아니면 생략해도 됨
-  //           };
-
-  //           io.to(String(numericRoomId)).emit("chat:receive", payload);
-
-  //           latestMessageId = item.messageId;
-  //         }
-
-  //         if (latestMessageId && latestMessageId !== lastSeen) {
-  //           lastSeenPerRoom.set(numericRoomId, latestMessageId);
-  //         }
-  //       } catch (err) {
-  //         console.error("chat poller 에러 (roomId=" + roomId + "):", err);
-  //       }
-  //     }
-  //   }, POLL_INTERVAL_MS);
-  // }
 
   socket.on("user:status", async () => {
     try {
@@ -537,6 +528,7 @@ io.on("connection", (socket) => {
 
       const newCurrent = current + 1;
 
+      // 이 방을 Poller 대상에 추가
       activeRooms.add(roomRow.id);
 
       socket.emit("room:join-result", {
@@ -654,43 +646,39 @@ io.on("connection", (socket) => {
         });
       }
 
-      // 최종 전송 메시지 (욕설이면 마스킹된 버전)
       const finalMessage = score > 0 ? maskedMessage : message;
 
-      // 1) createdAt, messageId 생성 (DynamoDB 설계와 비슷한 형태 유지)
-      const createdAt = new Date();
-      const messageId = `${createdAt.toISOString()}#${user.id}`;
+      const createdAt = new Date().toISOString();
+      const ddbMessageId = `${createdAt}#${user.id}`;
 
-      // 2) RDS(chat_messages)에 저장
+      // 🔹 DynamoDB에 채팅 저장
       try {
-        await pool.query(
-          `INSERT INTO chat_messages
-             (room_id, user_id, message_id, nickname, body, original_message,
-              score, origin_instance_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            roomId,
-            user.id,
-            messageId,
-            nickname,
-            finalMessage,
-            message,
-            score,
-            INSTANCE_ID,
-            createdAt,
-          ]
+        await ddb.send(
+          new PutCommand({
+            TableName: DDB_CHAT_TABLE,
+            Item: {
+              roomId: Number(roomId),
+              messageId: ddbMessageId,
+              senderUserId: Number(user.id),
+              nickname: nickname,
+              body: finalMessage,
+              originalMessage: message,
+              score: Number(score),
+              createdAt: createdAt,
+              originInstanceId: INSTANCE_ID,
+            },
+          })
         );
       } catch (err) {
-        console.error("chat_messages 저장 실패:", err);
-        // 여기서 실패해도, 일단 채팅은 흘러가게 둘 건지, 막을 건지 정책에 따라 결정
+        console.error("DynamoDB ChatMessages 저장 실패:", err);
       }
 
-      // 3) 브로드캐스트 (클라이언트에도 messageId 전달)
+      // 🔹 같은 인스턴스의 유저들에게 즉시 전송
       io.to(String(roomId)).emit("chat:receive", {
         nickname,
         message: finalMessage,
         userId: user.id,
-        messageId,
+        messageId: ddbMessageId,
       });
     } catch (err) {
       console.error("chat:send 처리 중 에러", err);
@@ -709,6 +697,13 @@ io.on("connection", (socket) => {
       const roomKey = String(roomId);
       const room = io.sockets.adapter.rooms.get(roomKey);
       const current = room ? room.size : 0;
+
+      // 방에 아무도 없으면 Poller 대상에서 제거
+      if (!room || room.size === 0) {
+        activeRooms.delete(roomId);
+        lastSeenPerRoom.delete(Number(roomId));
+      }
+
       io.emit("room:user-count-changed", {
         roomId,
         currentUsers: current,
@@ -717,11 +712,10 @@ io.on("connection", (socket) => {
   });
 });
 
-// 서버 시작
-const PORT = 3000;
+// ---------------- 서버 시작 + Poller 시작 ----------------
+const PORT = process.env.PORT || 3000;
 
-// 폴링 루프 시작
-// startChatPoller();
+startChatPoller();
 
 server.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

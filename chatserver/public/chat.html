@@ -181,7 +181,6 @@
     <script>
       const msgInput = document.getElementById("message");
       const sendBtn = document.getElementById("sendBtn");
-      const logEl = document.getElementById("log");
       const chatLogEl = document.getElementById("chatLog");
       const logoutBtn = document.getElementById("logoutBtn");
 
@@ -190,13 +189,8 @@
       let currentUserId = null;
 
       function log(text) {
-        if (chatLogEl) {
-          chatLogEl.textContent += text + "\n";
-          chatLogEl.scrollTop = chatLogEl.scrollHeight;
-        } else {
-          logEl.textContent += text + "\n";
-          logEl.scrollTop = logEl.scrollHeight;
-        }
+        chatLogEl.textContent += text + "\n";
+        chatLogEl.scrollTop = chatLogEl.scrollHeight;
       }
 
       function ensureAuth() {
@@ -227,7 +221,7 @@
       }
 
       function connectSocket(token, roomId) {
-        socket = io("http://localhost:3000", {
+        socket = io({
           auth: { token },
         });
 
@@ -305,7 +299,9 @@
 
       logoutBtn.onclick = () => {
         localStorage.removeItem("authToken");
+        localStorage.removeItem("userId");
         localStorage.removeItem("nickname");
+        localStorage.removeItem("isAdmin");
         localStorage.removeItem("roomId");
         alert("로그아웃되었습니다.");
         window.location.href = "/";
