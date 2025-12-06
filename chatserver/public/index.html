@@ -187,6 +187,7 @@
               <button id="registerBtn" class="btn">회원가입</button>
             </div>
           </div>
+          <button id="googleLoginBtn" class="btn">Google로 로그인</button>
 
           <div class="group-box">
             <div class="group-box-title">Login</div>
@@ -205,6 +206,12 @@
     </div>
 
     <script>
+      const googleLoginBtn = document.getElementById("googleLoginBtn");
+      googleLoginBtn.onclick = () => {
+        const cognitoUrl = "https://<user-pool-domain>/oauth2/authorize?...";
+        window.location.href = cognitoUrl;
+      };
+
       const regEmailInput = document.getElementById("reg-email");
       const regPasswordInput = document.getElementById("reg-password");
       const regNicknameInput = document.getElementById("reg-nickname");
