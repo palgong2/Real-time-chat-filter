@@ -26,7 +26,31 @@ const {
 } = process.env;
 
 const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
-const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
+const {
+  DynamoDBDocumentClient,
+  PutCommand,
+  QueryCommand,
+} = require("@aws-sdk/lib-dynamodb");
+
+async function getRecentRoomChats(roomId, limit = 10) {
+  try {
+    const resp = await ddb.send(
+      new QueryCommand({
+        TableName: CHAT_TABLE,
+        KeyConditionExpression: "roomId = :r",
+        ExpressionAttributeValues: {
+          ":r": String(roomId),
+        },
+        ScanIndexForward: false, // sentAt 내림차순 (최근것 먼저)
+        Limit: limit,
+      })
+    );
+    return resp.Items || [];
+  } catch (err) {
+    console.error("최근 방 채팅 조회 실패:", err);
+    return [];
+  }
+}
 
 const DDB_REGION = AWS_REGION; // us-east-1
 const CHAT_TABLE = process.env.CHAT_TABLE_NAME || "ChatMessages";
@@ -164,7 +188,11 @@ async function sendBanNotificationViaSNS(user, abuseLogId, roomId, score) {
   try {
     const logs = await getRecentAbuseLogs(user.id, 5);
 
-    // 최근 로그를 사람이 보기 좋게 문자열로 구성
+    // ★ 여기 추가: 최근 방 채팅 10개 끌어오기
+    const recentChats = await getRecentRoomChats(roomId, 10);
+    // 오래된 것부터 보이게 순서 뒤집기
+    const orderedChats = recentChats.slice().reverse();
+
     const logLines = logs.map((l, idx) => {
       const t = new Date(l.created_at).toISOString();
       return [
@@ -175,6 +203,16 @@ async function sendBanNotificationViaSNS(user, abuseLogId, roomId, score) {
         `      마스킹: ${l.masked_message}`,
       ].join("\n");
     });
+
+    // ★ 여기: 최근 채팅 문맥
+    const contextLines =
+      orderedChats.length > 0
+        ? orderedChats.map((c, idx) => {
+            const t = c.sentAt || "";
+            const text = c.masked || c.original || "";
+            return `  [${idx + 1}] ${t}  ${c.nickname}: ${text}`;
+          })
+        : ["  (기록 없음)"];
 
     const messageLines = [
       "[Abuse Chat Filter] 계정 정지 알림",
@@ -193,6 +231,9 @@ async function sendBanNotificationViaSNS(user, abuseLogId, roomId, score) {
       "",
       "■ 최근 욕설 로그 (최신 5건)",
       logLines.length > 0 ? logLines.join("\n") : "  (기록 없음)",
+      "",
+      "■ 최근 방 채팅 (문맥용, 최신 10건)",
+      contextLines.join("\n"),
       "",
       `정지 시각: ${new Date().toISOString()}`,
     ];
