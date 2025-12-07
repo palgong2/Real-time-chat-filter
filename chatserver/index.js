@@ -35,7 +35,7 @@ const COGNITO_DOMAIN =
   "https://us-east-1p0mibo6ro.auth.us-east-1.amazoncognito.com";
 const COGNITO_CLIENT_ID = "6rq398uacre4j7ii3er4e5mp7l";
 const COGNITO_REDIRECT_URI =
-  "https://d841ly8p4kdic.cloudfront.net/cognito/callback";
+  "https://d17y6kzu40e8he.cloudfront.net/cognito/callback";
 
 // AWS 클라이언트
 const sns = new SNSClient({ region: AWS_REGION });
