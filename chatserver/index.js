@@ -25,6 +25,17 @@ const {
   NOTIFY_SNS_TOPIC_ARN, // 정지 알림용 SNS 토픽 (메일 발송 등)
 } = process.env;
 
+const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+const { DynamoDBDocumentClient, PutCommand } = require("@aws-sdk/lib-dynamodb");
+
+const DDB_REGION = AWS_REGION; // us-east-1
+const CHAT_TABLE = process.env.CHAT_TABLE_NAME || "ChatMessages";
+
+const ddbClient = new DynamoDBClient({ region: DDB_REGION });
+const ddb = DynamoDBDocumentClient.from(ddbClient, {
+  marshallOptions: { removeUndefinedValues: true },
+});
+
 // 인스턴스 ID는 환경변수가 있으면 그걸 쓰고,
 // 없으면 hostname 을 사용해서 인스턴스별로 서로 다르게 만든다.
 const INSTANCE_ID = process.env.INSTANCE_ID || os.hostname();
@@ -94,6 +105,41 @@ function evaluateMessage(original) {
   return { score: totalScore, maskedMessage: masked };
 }
 
+async function saveChatToDynamo({
+  roomId,
+  userId,
+  nickname,
+  original,
+  masked,
+  score,
+  instanceId,
+}) {
+  const sentAt = new Date().toISOString();
+
+  const item = {
+    roomId: String(roomId),
+    sentAt, // sort key
+    messageId: sentAt, // 간단하게 sentAt 재사용
+    userId,
+    nickname,
+    original,
+    masked,
+    score: Number(score || 0),
+    instanceId: instanceId || INSTANCE_ID,
+  };
+
+  try {
+    await ddb.send(
+      new PutCommand({
+        TableName: CHAT_TABLE,
+        Item: item,
+      })
+    );
+  } catch (err) {
+    console.error("DynamoDB 저장 실패:", err);
+  }
+}
+
 // ---------------- RDS 쪽 유저/제재/로그 ----------------
 async function getRecentAbuseLogs(userId, limit = 5) {
   const [rows] = await pool.query(
@@ -109,7 +155,6 @@ async function getRecentAbuseLogs(userId, limit = 5) {
   return rows;
 }
 
-// SNS로 정지 알림 전송 (실제 메일 발송은 SNS 구독자에서 처리)
 async function sendBanNotificationViaSNS(user, abuseLogId, roomId, score) {
   if (!NOTIFY_SNS_TOPIC_ARN) {
     console.log("[WARN] NOTIFY_SNS_TOPIC_ARN 미설정 - 정지 알림 SNS 미발송");
@@ -119,25 +164,49 @@ async function sendBanNotificationViaSNS(user, abuseLogId, roomId, score) {
   try {
     const logs = await getRecentAbuseLogs(user.id, 5);
 
-    const payload = {
-      type: "ban",
-      userEmail: user.email,
-      nickname: user.nickname,
-      userId: user.id,
-      roomId,
-      score,
-      abuseLogId,
-      logs,
-      bannedAt: new Date().toISOString(),
-    };
+    // 최근 로그를 사람이 보기 좋게 문자열로 구성
+    const logLines = logs.map((l, idx) => {
+      const t = new Date(l.created_at).toISOString();
+      return [
+        `  [${idx + 1}] 시간: ${t}`,
+        `      방 ID: ${l.room_id}`,
+        `      점수: ${l.score}`,
+        `      원본: ${l.original_message}`,
+        `      마스킹: ${l.masked_message}`,
+      ].join("\n");
+    });
+
+    const messageLines = [
+      "[Abuse Chat Filter] 계정 정지 알림",
+      "",
+      "■ 사용자 정보",
+      `- 닉네임: ${user.nickname}`,
+      `- 이메일: ${user.email}`,
+      `- userId: ${user.id}`,
+      "",
+      "■ 정지 트리거",
+      `- roomId: ${roomId}`,
+      `- 이번 메시지 점수: ${score}`,
+      abuseLogId
+        ? `- abuse_log_id: ${abuseLogId}`
+        : "- abuse_log_id: (저장 실패 또는 없음)",
+      "",
+      "■ 최근 욕설 로그 (최신 5건)",
+      logLines.length > 0 ? logLines.join("\n") : "  (기록 없음)",
+      "",
+      `정지 시각: ${new Date().toISOString()}`,
+    ];
+
+    const textMessage = messageLines.join("\n");
 
     await sns.send(
       new PublishCommand({
         TopicArn: NOTIFY_SNS_TOPIC_ARN,
-        Message: JSON.stringify(payload),
-        Subject: "Abuse Chat Filter - 계정 정지 알림",
+        Subject: `[AbuseChat] 계정 정지 - ${user.nickname}`,
+        Message: textMessage,
       })
     );
+
     console.log("[INFO] 정지 알림 SNS 발송 완료:", user.email);
   } catch (err) {
     console.error("정지 알림 SNS 발송 실패:", err);
@@ -719,6 +788,19 @@ io.on("connection", (socket) => {
         message: finalMessage,
         userId: user.id,
         messageId: null,
+      });
+
+      // DynamoDB에 전체 채팅 저장 (원본 + 마스킹 + 점수)
+      saveChatToDynamo({
+        roomId,
+        userId: user.id,
+        nickname,
+        original: message,
+        masked: finalMessage,
+        score,
+        instanceId: INSTANCE_ID,
+      }).catch((err) => {
+        console.error("saveChatToDynamo 에러:", err);
       });
 
       // 2) SNS로 브로드캐스트 → SNS가 모든 SQS로 fan-out → 각 인스턴스 poller가 받아서 emit
