@@ -13,7 +13,7 @@ const mysql = require("mysql2/promise");
 const DB_HOST = "chat-mysql.crjpe7o6zkmo.us-east-1.rds.amazonaws.com";
 const DB_PORT = 3306;
 const DB_USER = "admin"; // RDS 만들 때 적은 마스터 유저
-const DB_PASSWORD = "RDS_비밀번호_여기에"; // 실제 비번으로 바꾸기
+const DB_PASSWORD = "dhrwnstj"; // 실제 비번으로 바꾸기
 const DB_NAME = "chat_db"; // 우리가 만든 DB 이름
 
 const pool = mysql.createPool({

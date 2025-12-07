@@ -206,6 +206,8 @@
     </div>
 
     <script>
+      const API_BASE = "http://chat-alb-2104893532.us-east-1.elb.amazonaws.com";
+
       const googleLoginBtn = document.getElementById("googleLoginBtn");
       googleLoginBtn.onclick = () => {
         const cognitoUrl = "https://<user-pool-domain>/oauth2/authorize?...";
@@ -239,7 +241,7 @@
         }
 
         try {
-          const res = await fetch("/auth/register", {
+          const res = await fetch(`${API_BASE}/auth/register`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password, nickname }),
@@ -272,7 +274,7 @@
         }
 
         try {
-          const res = await fetch("/auth/login", {
+          const res = await fetch(`${API_BASE}/auth/login`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ email, password }),

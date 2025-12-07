@@ -7,28 +7,27 @@ const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
 
-const { DynamoDBClient } = require("@aws-sdk/client-dynamodb");
+// AWS SDK v3 - SNS, SQS
+const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
 const {
-  DynamoDBDocumentClient,
-  PutCommand,
-  QueryCommand,
-} = require("@aws-sdk/lib-dynamodb");
+  SQSClient,
+  ReceiveMessageCommand,
+  DeleteMessageCommand,
+} = require("@aws-sdk/client-sqs");
 
-// ===== 기본 설정들 =====
-const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-later";
-const AWS_REGION = process.env.AWS_REGION || "ap-northeast-2";
-const DDB_CHAT_TABLE = process.env.DDB_CHAT_TABLE || "ChatMessages";
-const INSTANCE_ID = process.env.INSTANCE_ID || "local-dev";
+// ===== 환경 변수 / 기본 설정 =====
+const {
+  JWT_SECRET = "dev-secret-change-later",
+  AWS_REGION = "us-east-1",
+  CHAT_SNS_TOPIC_ARN, // 채팅 브로드캐스트용 SNS 토픽
+  CHAT_SQS_QUEUE_URL, // 각 인스턴스가 읽을 SQS 큐
+  NOTIFY_SNS_TOPIC_ARN, // 정지 알림용 SNS 토픽 (메일 발송 등)
+  INSTANCE_ID = "local-dev",
+} = process.env;
 
-// DynamoDB 클라이언트
-const ddbClient = new DynamoDBClient({ region: AWS_REGION });
-const ddb = DynamoDBDocumentClient.from(ddbClient, {
-  marshallOptions: { removeUndefinedValues: true },
-});
-
-// 여러 인스턴스/방 상태 관리용
-const activeRooms = new Set(); // 이 인스턴스에서 사용 중인 roomId 목록
-const lastSeenPerRoom = new Map(); // roomId -> 마지막으로 본 messageId
+// AWS 클라이언트
+const sns = new SNSClient({ region: AWS_REGION });
+const sqs = CHAT_SQS_QUEUE_URL ? new SQSClient({ region: AWS_REGION }) : null;
 
 // Express 앱 생성
 const app = express();
@@ -70,7 +69,7 @@ function evaluateMessage(original) {
   return { score: totalScore, maskedMessage: masked };
 }
 
-// ---------------- RDS 쪽 유저/제재 로직 ----------------
+// ---------------- RDS 쪽 유저/제재/로그 ----------------
 async function getRecentAbuseLogs(userId, limit = 5) {
   const [rows] = await pool.query(
     `
@@ -85,15 +84,39 @@ async function getRecentAbuseLogs(userId, limit = 5) {
   return rows;
 }
 
-async function notifyBanByEmailPlaceholder(user, abuseLogId, roomId, score) {
-  const logs = await getRecentAbuseLogs(user.id, 5);
+// SNS로 정지 알림 전송 (실제 메일 발송은 SNS 구독자에서 처리)
+async function sendBanNotificationViaSNS(user, abuseLogId, roomId, score) {
+  if (!NOTIFY_SNS_TOPIC_ARN) {
+    console.log("[WARN] NOTIFY_SNS_TOPIC_ARN 미설정 - 정지 알림 SNS 미발송");
+    return;
+  }
 
-  // TODO: 여기서 logs를 문자열로 예쁘게 포맷해서
-  // AWS SNS(또는 SES)로 user.email에 전송하는 코드 넣을 예정
-  console.log("=== BAN NOTIFY START ===");
-  console.log("정지 대상 이메일:", user.email);
-  console.log("최근 욕설 로그 예시:", logs);
-  console.log("=== BAN NOTIFY END ===");
+  try {
+    const logs = await getRecentAbuseLogs(user.id, 5);
+
+    const payload = {
+      type: "ban",
+      userEmail: user.email,
+      nickname: user.nickname,
+      userId: user.id,
+      roomId,
+      score,
+      abuseLogId,
+      logs,
+      bannedAt: new Date().toISOString(),
+    };
+
+    await sns.send(
+      new PublishCommand({
+        TopicArn: NOTIFY_SNS_TOPIC_ARN,
+        Message: JSON.stringify(payload),
+        Subject: "Abuse Chat Filter - 계정 정지 알림",
+      })
+    );
+    console.log("[INFO] 정지 알림 SNS 발송 완료:", user.email);
+  } catch (err) {
+    console.error("정지 알림 SNS 발송 실패:", err);
+  }
 }
 
 async function logAbuse({ userId, roomId, original, masked, score }) {
@@ -160,12 +183,15 @@ async function applyPenalty(user, score, abuseLogId = null, roomId = null) {
   user.muteUntil = newMuteUntil;
 
   if (result === "banned") {
-    await pool.query(
+    // ban_events 기록
+    const [res] = await pool.query(
       "INSERT INTO ban_events (user_id, abuse_log_id, room_id, score) VALUES (?, ?, ?, ?)",
       [user.id, abuseLogId, roomId, score]
     );
+    console.log("[INFO] ban_events 기록:", res.insertId);
 
-    await notifyBanByEmailPlaceholder(user, abuseLogId, roomId, score);
+    // SNS로 정지 알림
+    await sendBanNotificationViaSNS(user, abuseLogId, roomId, score);
   }
 
   return result;
@@ -301,89 +327,106 @@ io.use((socket, next) => {
   }
 });
 
-// ---------------- DynamoDB Poller ----------------
+// ---------------- SQS Poller (SNS → SQS → 모든 인스턴스) ----------------
 function startChatPoller() {
-  const POLL_INTERVAL_MS = 1000;
+  if (!sqs || !CHAT_SQS_QUEUE_URL) {
+    console.log(
+      "[WARN] CHAT_SQS_QUEUE_URL 미설정 - SQS 기반 브로드캐스트 비활성화"
+    );
+    return;
+  }
 
-  setInterval(async () => {
-    if (activeRooms.size === 0) return;
+  console.log("[INFO] SQS Poller 시작:", CHAT_SQS_QUEUE_URL);
 
-    for (const roomId of activeRooms) {
+  const WAIT_SECONDS = 10;
+  let pollerEnabled = true;
+
+  (async function loop() {
+    while (pollerEnabled) {
       try {
-        const numericRoomId = Number(roomId);
-        if (!numericRoomId || Number.isNaN(numericRoomId)) continue;
+        const resp = await sqs.send(
+          new ReceiveMessageCommand({
+            QueueUrl: CHAT_SQS_QUEUE_URL,
+            MaxNumberOfMessages: 10,
+            WaitTimeSeconds: WAIT_SECONDS,
+          })
+        );
 
-        const lastSeen = lastSeenPerRoom.get(numericRoomId) || null;
-
-        let params;
-        if (lastSeen) {
-          params = {
-            TableName: DDB_CHAT_TABLE,
-            KeyConditionExpression:
-              "roomId = :roomId AND messageId > :lastMessageId",
-            ExpressionAttributeValues: {
-              ":roomId": numericRoomId,
-              ":lastMessageId": lastSeen,
-            },
-            ScanIndexForward: true, // 오래된 → 최신
-            Limit: 50,
-          };
-        } else {
-          params = {
-            TableName: DDB_CHAT_TABLE,
-            KeyConditionExpression: "roomId = :roomId",
-            ExpressionAttributeValues: {
-              ":roomId": numericRoomId,
-            },
-            ScanIndexForward: false, // 최신부터
-            Limit: 20,
-          };
-        }
-
-        const result = await ddb.send(new QueryCommand(params));
-        const items = result.Items || [];
-        if (items.length === 0) continue;
-
-        let ordered;
-        if (!lastSeen) {
-          ordered = items.slice().reverse(); // 오래된 → 최신
-          const lastItem = ordered[ordered.length - 1];
-          if (lastItem && lastItem.messageId) {
-            lastSeenPerRoom.set(numericRoomId, lastItem.messageId);
-          }
-          // 첫 로드는 과거 메시지 재전송 X
+        const messages = resp.Messages || [];
+        if (messages.length === 0) {
           continue;
-        } else {
-          ordered = items; // 이미 오래된 → 최신 순
         }
 
-        let latestMessageId = lastSeen;
-        for (const item of ordered) {
-          if (!item || !item.messageId) continue;
+        for (const m of messages) {
+          try {
+            let bodyObj;
+            try {
+              bodyObj = JSON.parse(m.Body);
+            } catch (e) {
+              console.error("SQS 메시지 JSON 파싱 실패:", e);
+              continue;
+            }
 
-          if (item.originInstanceId === INSTANCE_ID) {
-            latestMessageId = item.messageId;
-            continue;
+            // SNS → SQS 구독이면 바디가 SNS envelope 형태
+            let payload;
+            if (bodyObj.Type === "Notification" && bodyObj.Message) {
+              try {
+                payload = JSON.parse(bodyObj.Message);
+              } catch (e) {
+                console.error("SNS Message JSON 파싱 실패:", e);
+                continue;
+              }
+            } else {
+              payload = bodyObj;
+            }
+
+            if (!payload || payload.type !== "chat") {
+              // 우리가 정의한 채팅 타입이 아니면 무시
+              continue;
+            }
+
+            // 자기 인스턴스에서 보낸 건 이미 local emit 했으므로 스킵
+            if (payload.originInstanceId === INSTANCE_ID) {
+              continue;
+            }
+
+            const roomId = payload.roomId;
+            if (!roomId) continue;
+
+            io.to(String(roomId)).emit("chat:receive", {
+              nickname: payload.nickname || "익명",
+              message: payload.message || "",
+              userId: payload.userId || null,
+              messageId: payload.messageId || null,
+            });
+          } finally {
+            // 성공/실패 상관없이 일단 삭제 (재처리 원치 않음)
+            try {
+              await sqs.send(
+                new DeleteMessageCommand({
+                  QueueUrl: CHAT_SQS_QUEUE_URL,
+                  ReceiptHandle: m.ReceiptHandle,
+                })
+              );
+            } catch (e) {
+              console.error("SQS 메시지 삭제 실패:", e);
+            }
           }
-
-          io.to(String(numericRoomId)).emit("chat:receive", {
-            nickname: item.nickname || "익명",
-            message: item.body || "",
-            userId: item.senderUserId || null,
-            messageId: item.messageId,
-          });
-
-          latestMessageId = item.messageId;
-        }
-
-        if (latestMessageId && latestMessageId !== lastSeen) {
-          lastSeenPerRoom.set(numericRoomId, latestMessageId);
         }
       } catch (err) {
-        console.error("chat poller 에러 (roomId=" + roomId + "):", err);
+        console.error("SQS Poller 에러:", err);
+
+        // 자격 증명 문제면 무한 로그 방지 위해 Poller 중지
+        if (err.name === "CredentialsProviderError") {
+          console.error(
+            "[FATAL] AWS 자격 증명 오류. SQS Poller를 중지합니다. " +
+              "EC2 IAM Role / Policy를 확인한 후 서비스를 재시작해야 합니다."
+          );
+          pollerEnabled = false;
+        }
       }
     }
-  }, POLL_INTERVAL_MS);
+  })();
 }
 
 // ---------------- Socket.IO 이벤트 ----------------
@@ -528,9 +571,6 @@ io.on("connection", (socket) => {
 
       const newCurrent = current + 1;
 
-      // 이 방을 Poller 대상에 추가
-      activeRooms.add(roomRow.id);
-
       socket.emit("room:join-result", {
         ok: true,
         roomId: roomRow.id,
@@ -648,38 +688,43 @@ io.on("connection", (socket) => {
 
       const finalMessage = score > 0 ? maskedMessage : message;
 
-      const createdAt = new Date().toISOString();
-      const ddbMessageId = `${createdAt}#${user.id}`;
-
-      // 🔹 DynamoDB에 채팅 저장
-      try {
-        await ddb.send(
-          new PutCommand({
-            TableName: DDB_CHAT_TABLE,
-            Item: {
-              roomId: Number(roomId),
-              messageId: ddbMessageId,
-              senderUserId: Number(user.id),
-              nickname: nickname,
-              body: finalMessage,
-              originalMessage: message,
-              score: Number(score),
-              createdAt: createdAt,
-              originInstanceId: INSTANCE_ID,
-            },
-          })
-        );
-      } catch (err) {
-        console.error("DynamoDB ChatMessages 저장 실패:", err);
-      }
-
-      // 🔹 같은 인스턴스의 유저들에게 즉시 전송
+      // 1) 같은 인스턴스에 붙어 있는 유저들에게 즉시 전송
       io.to(String(roomId)).emit("chat:receive", {
         nickname,
         message: finalMessage,
         userId: user.id,
-        messageId: ddbMessageId,
+        messageId: null,
       });
+
+      // 2) SNS로 브로드캐스트 → SNS가 모든 SQS로 fan-out → 각 인스턴스 poller가 받아서 emit
+      if (CHAT_SNS_TOPIC_ARN) {
+        const broadcastPayload = {
+          type: "chat",
+          roomId: Number(roomId),
+          message: finalMessage,
+          nickname,
+          userId: user.id,
+          originInstanceId: INSTANCE_ID,
+          sentAt: new Date().toISOString(),
+        };
+
+        // fire-and-forget; 실패해도 채팅 자체는 로컬에서는 동작
+        sns
+          .send(
+            new PublishCommand({
+              TopicArn: CHAT_SNS_TOPIC_ARN,
+              Message: JSON.stringify(broadcastPayload),
+            })
+          )
+          .catch((err) => {
+            console.error("채팅 SNS 브로드캐스트 실패:", err);
+          });
+      } else {
+        // SNS 미설정이면 인스턴스 간 동기화는 안 되지만,
+        // 단일 인스턴스에서는 정상 동작
+        // 필요하다면 여기 로그만 남김
+        // console.log("[WARN] CHAT_SNS_TOPIC_ARN 미설정 - cross-instance 브로드캐스트 비활성화");
+      }
     } catch (err) {
       console.error("chat:send 처리 중 에러", err);
       socket.emit("chat:receive", {
@@ -697,12 +742,6 @@ io.on("connection", (socket) => {
       const roomKey = String(roomId);
       const room = io.sockets.adapter.rooms.get(roomKey);
       const current = room ? room.size : 0;
-
-      // 방에 아무도 없으면 Poller 대상에서 제거
-      if (!room || room.size === 0) {
-        activeRooms.delete(roomId);
-        lastSeenPerRoom.delete(Number(roomId));
-      }
 
       io.emit("room:user-count-changed", {
         roomId,

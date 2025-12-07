@@ -201,8 +201,10 @@
       </div>
     </div>
 
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="http://chat-alb-2104893532.us-east-1.elb.amazonaws.com/socket.io/socket.io.js"></script>
     <script>
+      const API_BASE = "http://chat-alb-2104893532.us-east-1.elb.amazonaws.com";
+
       const roomNameInput = document.getElementById("roomName");
       const createRoomBtn = document.getElementById("createRoomBtn");
       const roomListContainer = document.getElementById("roomList");
@@ -233,8 +235,10 @@
       }
 
       function connectSocket(token) {
-        socket = io({
+        socket = io(API_BASE, {
           auth: { token },
+          transports: ["websocket"], // HTTP long-polling 완전히 비활성화
+          upgrade: false, // 불필요한 폴백/업그레이드 절차 제거
         });
 
         socket.on("connect", () => {
