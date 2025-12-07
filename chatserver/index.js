@@ -858,6 +858,8 @@ io.on("connection", (socket) => {
   });
 });
 
+console.log("[BOOT] Using DynamoDB table:", CHAT_TABLE, "region:", DDB_REGION);
+
 // ---------------- 서버 시작 + Poller 시작 ----------------
 const PORT = process.env.PORT || 3000;
 
