@@ -194,10 +194,11 @@
         </div>
       </div>
     </div>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="http://alb-chatserver-200803419.us-east-1.elb.amazonaws.com/socket.io/socket.io.js"></script>
     <script>
       // ALB 뒤에 있는 백엔드 API 주소
-      const API_BASE = window.location.origin;
+      const API_BASE =
+        "http://alb-chatserver-200803419.us-east-1.elb.amazonaws.com";
 
       const msgInput = document.getElementById("message");
       const sendBtn = document.getElementById("sendBtn");
