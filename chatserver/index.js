@@ -20,8 +20,8 @@ const {
 const {
   JWT_SECRET = "dev-secret-change-later",
   AWS_REGION = "us-east-1",
-  CHAT_SNS_TOPIC_ARN, // 채팅 브로드캐스트용 SNS 토픽
-  CHAT_SQS_QUEUE_URL, // 각 인스턴스가 읽을 SQS 큐
+  CHAT_SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:883579328882:CHAT-TOPIC", // 채팅 브로드캐스트용 SNS 토픽
+  CHAT_SQS_QUEUE_URL = "https://sqs.us-east-1.amazonaws.com/883579328882/CHAT-QUEUE", // 각 인스턴스가 읽을 SQS 큐
   NOTIFY_SNS_TOPIC_ARN, // 정지 알림용 SNS 토픽 (메일 발송 등)
 } = process.env;
 
