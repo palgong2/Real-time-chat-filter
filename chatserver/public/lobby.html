@@ -237,8 +237,8 @@
       function connectSocket(token) {
         socket = io(API_BASE, {
           auth: { token },
-          transports: ["websocket"], // HTTP long-polling 완전히 비활성화
-          upgrade: false, // 불필요한 폴백/업그레이드 절차 제거
+          //          transports: ["websocket"], // HTTP long-polling 완전히 비활성화
+          //          upgrade: false, // 불필요한 폴백/업그레이드 절차 제거
         });
 
         socket.on("connect", () => {
