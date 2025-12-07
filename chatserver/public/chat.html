@@ -63,18 +63,6 @@
         margin-bottom: 4px;
       }
 
-      .top-bar-left {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-      }
-
-      .top-bar-right {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-      }
-
       .group-box {
         border: 2px solid #808080;
         border-top-color: #ffffff;
@@ -166,14 +154,8 @@
 
       <div class="window-body">
         <div class="top-bar">
-          <div class="top-bar-left">
-            <span>실시간 채팅</span>
-          </div>
-          <div class="top-bar-right">
-            <!-- 새로 추가된 버튼 -->
-            <button id="whoamiBtn" class="btn">인스턴스 확인</button>
-            <button id="logoutBtn" class="btn">로그아웃</button>
-          </div>
+          <span>실시간 채팅</span>
+          <button id="logoutBtn" class="btn">로그아웃</button>
         </div>
 
         <div class="group-box">
@@ -194,17 +176,15 @@
         </div>
       </div>
     </div>
-    <script src="http://alb-chatserver-200803419.us-east-1.elb.amazonaws.com/socket.io/socket.io.js"></script>
+    <script src="http://ALB-chatserver-2080839419.us-east-1.elb.amazonaws.com/socket.io/socket.io.js"></script>
     <script>
-      // ALB 뒤에 있는 백엔드 API 주소
       const API_BASE =
-        "http://alb-chatserver-200803419.us-east-1.elb.amazonaws.com";
+        "http://ALB-chatserver-2080839419.us-east-1.elb.amazonaws.com";
 
       const msgInput = document.getElementById("message");
       const sendBtn = document.getElementById("sendBtn");
       const chatLogEl = document.getElementById("chatLog");
       const logoutBtn = document.getElementById("logoutBtn");
-      const whoamiBtn = document.getElementById("whoamiBtn");
 
       let socket = null;
       let currentRoomId = null;
@@ -245,9 +225,8 @@
       function connectSocket(token, roomId) {
         socket = io(API_BASE, {
           auth: { token },
-          // transports나 upgrade 옵션은 필요시 다시 활성화
-          // transports: ["websocket"],
-          // upgrade: false,
+          transports: ["websocket"], // HTTP long-polling 완전히 비활성화
+          upgrade: false, // 불필요한 폴백/업그레이드 절차 제거
         });
 
         socket.on("connect", () => {
@@ -293,22 +272,6 @@
         chatLogEl.scrollTop = chatLogEl.scrollHeight;
       }
 
-      // /whoami 결과를 채팅 로그에 찍어주는 함수
-      async function logInstanceInfo() {
-        try {
-          const res = await fetch(`${API_BASE}/whoami`);
-          if (!res.ok) {
-            log(`[SYSTEM] /whoami 호출 실패: HTTP ${res.status}`);
-            return;
-          }
-          const data = await res.json().catch(() => ({}));
-          const instanceId = data.instanceId || JSON.stringify(data);
-          log(`[SYSTEM] 현재 인스턴스: ${instanceId}`);
-        } catch (e) {
-          log(`[ERROR] /whoami 호출 오류: ${e.message}`);
-        }
-      }
-
       const auth = ensureAuth();
       if (auth) {
         currentRoomId = auth.roomId;
@@ -346,11 +309,6 @@
         localStorage.removeItem("roomId");
         alert("로그아웃되었습니다.");
         window.location.href = "/";
-      };
-
-      // 인스턴스 확인 버튼 클릭 시 /whoami 결과를 로그에 출력
-      whoamiBtn.onclick = () => {
-        logInstanceInfo();
       };
     </script>
   </body>
