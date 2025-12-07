@@ -8,6 +8,8 @@ const bcrypt = require("bcryptjs");
 const { pool } = require("./db");
 const os = require("os");
 
+const ROOM_MAX_USERS = 2;
+
 // AWS SDK v3 - SNS, SQS
 const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
 const {
@@ -622,7 +624,7 @@ io.on("connection", (socket) => {
       const userId = socket.data.userId;
       const [result] = await pool.query(
         "INSERT INTO rooms (name, max_users, created_by_user_id) VALUES (?, ?, ?)",
-        [trimmed, 5, userId]
+        [trimmed, ROOM_MAX_USERS, userId]
       );
 
       const room = {
@@ -656,7 +658,7 @@ io.on("connection", (socket) => {
         return {
           id: r.id,
           name: r.name,
-          maxUsers: r.max_users,
+          maxUsers: ROOM_MAX_USERS,
           currentUsers: current,
         };
       });
@@ -692,7 +694,7 @@ io.on("connection", (socket) => {
       if (current >= roomRow.max_users) {
         socket.emit("room:join-result", {
           ok: false,
-          message: "방 인원이 가득 찼습니다. (최대 5명)",
+          message: "방 인원이 가득 찼습니다. (최대 2명)",
         });
         return;
       }
