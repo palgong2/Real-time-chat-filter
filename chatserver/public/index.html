@@ -206,7 +206,7 @@
     </div>
 
     <script>
-      const API_BASE = "http://chat-alb-2104893532.us-east-1.elb.amazonaws.com";
+      const API_BASE = window.location.origin;
 
       const googleLoginBtn = document.getElementById("googleLoginBtn");
       googleLoginBtn.onclick = () => {
