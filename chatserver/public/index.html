@@ -208,9 +208,24 @@
     <script>
       const API_BASE = window.location.origin;
 
+      const COGNITO_DOMAIN =
+        "https://us-east-1p0mibo6ro.auth.us-east-1.amazoncognito.com";
+      const COGNITO_CLIENT_ID = "6rq398uacre4j7ii3er4e5mp7l";
+      const COGNITO_REDIRECT_URI =
+        "https://d841ly8p4kdic.cloudfront.net/cognito/callback";
+
       const googleLoginBtn = document.getElementById("googleLoginBtn");
       googleLoginBtn.onclick = () => {
-        const cognitoUrl = "https://<user-pool-domain>/oauth2/authorize?...";
+        const scope = encodeURIComponent("openid email");
+        const redirect = encodeURIComponent(COGNITO_REDIRECT_URI);
+
+        const cognitoUrl =
+          `${COGNITO_DOMAIN}/oauth2/authorize` +
+          `?client_id=${encodeURIComponent(COGNITO_CLIENT_ID)}` +
+          `&response_type=code` +
+          `&scope=${scope}` +
+          `&redirect_uri=${redirect}`;
+
         window.location.href = cognitoUrl;
       };
 
