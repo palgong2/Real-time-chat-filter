@@ -203,8 +203,10 @@
       </div>
     </div>
 
+    <script src="http://ALB-chatserver-2080839419.us-east-1.elb.amazonaws.com/socket.io/socket.io.js"></script>
     <script>
-      const API_BASE = window.location.origin;
+      const API_BASE =
+        "http://ALB-chatserver-2080839419.us-east-1.elb.amazonaws.com";
 
       const regEmailInput = document.getElementById("reg-email");
       const regPasswordInput = document.getElementById("reg-password");
