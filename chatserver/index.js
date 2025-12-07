@@ -5,7 +5,9 @@ const { Server } = require("socket.io");
 const path = require("path");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcryptjs");
+const axios = require("axios");
 const { pool } = require("./db");
+const os = require("os");
 
 // AWS SDK v3 - SNS, SQS
 const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
@@ -22,8 +24,18 @@ const {
   CHAT_SNS_TOPIC_ARN, // 채팅 브로드캐스트용 SNS 토픽
   CHAT_SQS_QUEUE_URL, // 각 인스턴스가 읽을 SQS 큐
   NOTIFY_SNS_TOPIC_ARN, // 정지 알림용 SNS 토픽 (메일 발송 등)
-  INSTANCE_ID = "local-dev",
 } = process.env;
+
+// 인스턴스 ID는 환경변수가 있으면 그걸 쓰고,
+// 없으면 hostname 을 사용해서 인스턴스별로 서로 다르게 만든다.
+const INSTANCE_ID = process.env.INSTANCE_ID || os.hostname();
+
+// ===== Cognito 설정 (실습용 하드코딩) =====
+const COGNITO_DOMAIN =
+  "https://us-east-1p0mibo6ro.auth.us-east-1.amazoncognito.com";
+const COGNITO_CLIENT_ID = "6rq398uacre4j7ii3er4e5mp7l";
+const COGNITO_REDIRECT_URI =
+  "https://d841ly8p4kdic.cloudfront.net/cognito/callback";
 
 // AWS 클라이언트
 const sns = new SNSClient({ region: AWS_REGION });
@@ -300,6 +312,197 @@ app.post("/auth/login", async (req, res) => {
   } catch (err) {
     console.error("로그인 에러:", err);
     return res.status(500).json({ message: "서버 에러" });
+  }
+});
+
+// ---------------- REST: Cognito 콜백 ----------------
+// 실서비스라면 id_token 서명 검증(JWK)까지 해야 하지만,
+// 여기서는 학습용으로 jwt.decode 만 사용한다.
+app.get("/cognito/callback", async (req, res) => {
+  const { code, error, error_description } = req.query;
+
+  if (error) {
+    console.error("Cognito error:", error, error_description);
+    return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("Cognito 로그인 오류: ${error}");
+  window.location.href = "/";
+</script>
+</body></html>`);
+  }
+
+  if (!code) {
+    return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("code 값이 없습니다.");
+  window.location.href = "/";
+</script>
+</body></html>`);
+  }
+
+  try {
+    // 1) Cognito 토큰 엔드포인트에 code 교환 요청
+    const tokenResp = await axios.post(
+      `${COGNITO_DOMAIN}/oauth2/token`,
+      new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: COGNITO_CLIENT_ID,
+        code,
+        redirect_uri: COGNITO_REDIRECT_URI,
+      }).toString(),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      }
+    );
+
+    const { id_token } = tokenResp.data || {};
+    if (!id_token) {
+      console.error("id_token 없음:", tokenResp.data);
+      return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("토큰 응답에 id_token 이 없습니다.");
+  window.location.href = "/";
+</script>
+</body></html>`);
+    }
+
+    // 2) id_token 디코딩 (학습용: 서명 검증 생략)
+    const decoded = jwt.decode(id_token);
+    if (!decoded) {
+      console.error("id_token decode 실패");
+      return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("id_token 디코딩에 실패했습니다.");
+  window.location.href = "/";
+</script>
+</body></html>`);
+    }
+
+    const email = decoded.email;
+    const sub = decoded.sub;
+    const userKey = email || sub;
+    if (!userKey) {
+      console.error("email/sub 없음:", decoded);
+      return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("사용자 식별 정보(email/sub)가 없습니다.");
+  window.location.href = "/";
+</script>
+</body></html>`);
+    }
+
+    // 3) 우리 DB에서 사용자 찾기 or 생성
+    let userRow = null;
+    const [found] = await pool.query(
+      "SELECT id, email, nickname, is_banned, is_admin, penalty_points, mute_until FROM users WHERE email = ?",
+      [userKey]
+    );
+
+    if (found.length > 0) {
+      userRow = found[0];
+    } else {
+      // email?.split 같은 최신 문법 대신 안전하게 처리
+      let nickname;
+      if (email && typeof email === "string") {
+        nickname = email.split("@")[0];
+      } else if (sub) {
+        nickname = `cognito_${String(sub).slice(0, 8)}`;
+      } else {
+        nickname = "cognito_user";
+      }
+
+      const dummyPasswordHash = bcrypt.hashSync("cognito-user", 10);
+
+      const [insert] = await pool.query(
+        "INSERT INTO users (email, password_hash, nickname) VALUES (?, ?, ?)",
+        [userKey, dummyPasswordHash, nickname]
+      );
+
+      const [rows2] = await pool.query(
+        "SELECT id, email, nickname, is_banned, is_admin, penalty_points, mute_until FROM users WHERE id = ?",
+        [insert.insertId]
+      );
+      userRow = rows2[0];
+    }
+
+    if (!userRow) {
+      console.error("사용자 생성/조회 실패");
+      return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("사용자 정보를 불러오지 못했습니다.");
+  window.location.href = "/";
+</script>
+</body></html>`);
+    }
+
+    if (userRow.is_banned) {
+      return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("정지된 계정입니다. 로그인할 수 없습니다.");
+  window.location.href = "/";
+</script>
+</body></html>`);
+    }
+
+    // 4) 기존 로컬 로그인과 동일한 방식으로 우리 JWT 발급
+    const appToken = jwt.sign(
+      {
+        userId: userRow.id,
+        nickname: userRow.nickname,
+      },
+      JWT_SECRET,
+      { expiresIn: "1h" }
+    );
+
+    const payloadForClient = {
+      token: appToken,
+      userId: userRow.id,
+      nickname: userRow.nickname,
+      isAdmin: !!userRow.is_admin,
+    };
+
+    // 5) 작은 HTML을 보내서 localStorage 채우고 로비로 이동
+    const html = `
+<!DOCTYPE html>
+<html lang="ko">
+  <body>
+    <script>
+      const data = ${JSON.stringify(payloadForClient)};
+      localStorage.setItem("authToken", data.token);
+      localStorage.setItem("userId", String(data.userId));
+      localStorage.setItem("nickname", data.nickname);
+      localStorage.setItem("isAdmin", data.isAdmin ? "1" : "0");
+      window.location.href = "/lobby.html";
+    </script>
+  </body>
+</html>`;
+    res.send(html);
+  } catch (err) {
+    // 옵셔널 체이닝 대신 구버전 문법으로 방어
+    let errMsg;
+    if (err && err.response && err.response.data) {
+      errMsg = err.response.data;
+    } else {
+      errMsg = err;
+    }
+    console.error("/cognito/callback 에러:", errMsg);
+
+    return res.send(`
+<!DOCTYPE html><html lang="ko"><body>
+<script>
+  alert("Cognito 로그인 처리 중 오류가 발생했습니다.");
+  window.location.href = "/";
+</script>
+</body></html>`);
   }
 });
 
