@@ -187,8 +187,6 @@
               <button id="registerBtn" class="btn">회원가입</button>
             </div>
           </div>
-          <button id="cognitoLoginBtn" class="btn">Cognito로 로그인</button>
-
           <div class="group-box">
             <div class="group-box-title">Login</div>
             <label for="login-email">이메일</label>
@@ -207,28 +205,6 @@
 
     <script>
       const API_BASE = window.location.origin;
-
-      const COGNITO_DOMAIN =
-        "https://us-east-1p0mibo6ro.auth.us-east-1.amazoncognito.com";
-      const COGNITO_CLIENT_ID = "6rq398uacre4j7ii3er4e5mp7l";
-      const COGNITO_REDIRECT_URI =
-        "https://d17y6kzu40e8he.cloudfront.net/cognito/callback";
-
-      const cognitoLoginBtn = document.getElementById("cognitoLoginBtn");
-
-      cognitoLoginBtn.onclick = () => {
-        // Cognito Hosted UI로 이동 (여기서 Google 버튼이 뜨거나, Cognito 계정 로그인 등 선택)
-        const params = new URLSearchParams({
-          client_id: COGNITO_CLIENT_ID,
-          response_type: "code",
-          scope: "openid email", // 필요시 profile 등 추가 가능
-          redirect_uri: COGNITO_REDIRECT_URI, // 지금 설정한 콜백 URL
-        });
-
-        const cognitoUrl = `${COGNITO_DOMAIN}/oauth2/authorize?${params.toString()}`;
-        console.log("Go to Cognito Hosted UI:", cognitoUrl);
-        window.location.href = cognitoUrl;
-      };
 
       const regEmailInput = document.getElementById("reg-email");
       const regPasswordInput = document.getElementById("reg-password");
