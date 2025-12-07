@@ -37,6 +37,27 @@ const sqs = CHAT_SQS_QUEUE_URL ? new SQSClient({ region: AWS_REGION }) : null;
 const app = express();
 app.use(express.json());
 
+// ----- CORS 허용 (S3 프론트에서 오는 요청용) -----
+app.use((req, res, next) => {
+  // 프론트 S3 웹사이트 도메인
+  const allowedOrigin =
+    "http://abuse-chat-frontend-22360034.s3-website-us-east-1.amazonaws.com";
+
+  res.header("Access-Control-Allow-Origin", allowedOrigin);
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  // 프리플라이트(OPTIONS)는 여기서 바로 200 반환
+  if (req.method === "OPTIONS") {
+    return res.sendStatus(200);
+  }
+
+  next();
+});
+
 // ---------------- 욕설 필터 관련 ----------------
 const PROFANITY_LIST = [
   { pattern: "욕1", score: 5 },
