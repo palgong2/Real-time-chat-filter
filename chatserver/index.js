@@ -190,9 +190,7 @@ async function sendBanNotificationViaSNS(user, abuseLogId, roomId, score) {
   try {
     const logs = await getRecentAbuseLogs(user.id, 5);
 
-    // ★ 여기 추가: 최근 방 채팅 10개 끌어오기
     const recentChats = await getRecentRoomChats(roomId, 10);
-    // 오래된 것부터 보이게 순서 뒤집기
     const orderedChats = recentChats.slice().reverse();
 
     const logLines = logs.map((l, idx) => {

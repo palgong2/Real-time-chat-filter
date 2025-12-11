@@ -290,7 +290,7 @@
           localStorage.setItem("authToken", data.token);
           localStorage.setItem("userId", String(data.userId));
           localStorage.setItem("nickname", data.nickname);
-          localStorage.setItem("isAdmin", data.isAdmin ? "1" : "0");
+          //          localStorage.setItem("isAdmin", data.isAdmin ? "1" : "0");
 
           log("[SYSTEM] 로그인 성공: " + data.nickname);
           window.location.href = "/lobby.html";
